@@ -19,9 +19,8 @@ use reth_revm::{database::StateProviderDatabase, db::State, primitives::KECCAK_E
 use reth_trie_common::{HashedPostState, TrieInput};
 use revm_bytecode::opcode::OpCode;
 use revm_database::states::{BundleState, CacheState, bundle_state::BundleRetention};
-use revm_inspectors::opcode::OpcodeGasInspector;
 
-use crate::{metrics::Metrics, transaction::validate_tx};
+use crate::{inspector::MeteringInspector, metrics::Metrics, transaction::validate_tx};
 
 /// Computes the pending trie input from a pre-built [`HashedPostState`].
 ///
@@ -183,22 +182,62 @@ fn add_state_root_trie_update_counts(
     );
 }
 
-/// Parses opcode name strings into validated [`OpCode`] values.
+/// Opcodes and precompiles to track during bundle metering.
+#[derive(Debug, Clone, Default)]
+pub struct MeteredOpcodes {
+    /// EVM opcodes to track.
+    pub opcodes: HashSet<OpCode>,
+    /// Precompile addresses to track, keyed by address with display name.
+    pub precompiles: HashMap<Address, String>,
+}
+
+impl MeteredOpcodes {
+    /// Returns true if no opcodes or precompiles are configured.
+    pub fn is_empty(&self) -> bool {
+        self.opcodes.is_empty() && self.precompiles.is_empty()
+    }
+}
+
+/// Standard EVM precompile names and their addresses.
 ///
-/// Returns an error for any unrecognized opcode name. Matching is case-insensitive.
-pub fn parse_opcode_names(names: &[String]) -> Result<HashSet<OpCode>, String> {
-    let name_to_opcode: HashMap<&str, OpCode> = (0..=255u8)
+/// Names follow EIP-7910 conventions where practical.
+const PRECOMPILES: &[(&str, u8)] = &[
+    ("ECREC", 0x01),
+    ("SHA256", 0x02),
+    ("RIPEMD160", 0x03),
+    ("IDENTITY", 0x04),
+    ("MODEXP", 0x05),
+    ("BN254_ADD", 0x06),
+    ("BN254_MUL", 0x07),
+    ("BN254_PAIRING", 0x08),
+    ("BLAKE2F", 0x09),
+    ("KZG_POINT_EVALUATION", 0x0a),
+];
+
+/// Parses opcode and precompile name strings into a [`MeteredOpcodes`] filter.
+///
+/// Recognizes EVM opcode names (e.g., `SSTORE`, `CALL`) and precompile names
+/// (e.g., `ECREC`, `BLAKE2F`). Matching is case-insensitive.
+/// Returns an error for any unrecognized name.
+pub fn parse_metered_names(names: &[String]) -> Result<MeteredOpcodes, String> {
+    let opcode_lookup: HashMap<&str, OpCode> = (0..=255u8)
         .filter_map(|byte| OpCode::new(byte).map(|op| (op.as_str(), op)))
         .collect();
 
-    let mut result = HashSet::new();
+    let precompile_lookup: HashMap<&str, (Address, &str)> = PRECOMPILES
+        .iter()
+        .map(|&(name, byte)| (name, (Address::with_last_byte(byte), name)))
+        .collect();
+
+    let mut result = MeteredOpcodes::default();
     for name in names {
         let upper = name.to_uppercase();
-        match name_to_opcode.get(upper.as_str()) {
-            Some(&opcode) => {
-                result.insert(opcode);
-            }
-            None => return Err(format!("Unknown opcode: {name}")),
+        if let Some(&opcode) = opcode_lookup.get(upper.as_str()) {
+            result.opcodes.insert(opcode);
+        } else if let Some(&(addr, display_name)) = precompile_lookup.get(upper.as_str()) {
+            result.precompiles.insert(addr, display_name.to_string());
+        } else {
+            return Err(format!("Unknown opcode or precompile: {name}"));
         }
     }
     Ok(result)
@@ -209,8 +248,9 @@ pub fn parse_opcode_names(names: &[String]) -> Result<HashSet<OpCode>, String> {
 /// Takes a state provider, chain spec, parsed bundle, block header, and optional pending state,
 /// then executes transactions in sequence to measure gas usage and execution time.
 ///
-/// When `metered_opcodes` is non-empty, an [`OpcodeGasInspector`] is attached to the EVM
-/// to collect per-opcode gas data. Only opcodes in the filter set appear in the output.
+/// When `metered_opcodes` is non-empty, a [`MeteringInspector`] is attached to the EVM
+/// to collect per-opcode and precompile gas data. Only items in the filter set appear
+/// in the output.
 ///
 /// Returns [`MeterBundleOutput`] containing transaction results and aggregated metrics.
 pub fn meter_bundle<SP>(
@@ -221,7 +261,7 @@ pub fn meter_bundle<SP>(
     parent_beacon_block_root: Option<B256>,
     pending_state: Option<PendingState>,
     mut l1_block_info: L1BlockInfo,
-    metered_opcodes: &HashSet<OpCode>,
+    metered_opcodes: &MeteredOpcodes,
 ) -> EyreResult<MeterBundleOutput>
 where
     SP: reth_provider::StateProvider,
@@ -395,7 +435,8 @@ where
     } else {
         let evm_config = BaseEvmConfig::base(chain_spec);
         let evm_env = evm_config.next_evm_env(header, &attributes)?;
-        let inspector = OpcodeGasInspector::new();
+        let precompile_addrs = metered_opcodes.precompiles.keys().copied().collect();
+        let inspector = MeteringInspector::new(precompile_addrs);
         let evm = evm_config.evm_with_env_and_inspector(&mut db, evm_env, inspector);
         let ctx = evm_config.context_for_next_block(header, attributes)?;
         let mut builder = evm_config.create_block_builder(evm, header, ctx);
@@ -403,9 +444,10 @@ where
 
         // Extract per-opcode gas data from the inspector, filtered to the configured set.
         let inspector = builder.evm().inspector();
-        let counts = inspector.opcode_counts();
-        let gas = inspector.opcode_gas();
-        metered_opcodes
+        let counts = inspector.inner().opcode_counts();
+        let gas = inspector.inner().opcode_gas();
+        let mut opcode_gas: Vec<OpcodeGas> = metered_opcodes
+            .opcodes
             .iter()
             .filter_map(|&opcode| {
                 let count = counts.get(&opcode).copied().unwrap_or(0);
@@ -419,7 +461,22 @@ where
                     None
                 }
             })
-            .collect()
+            .collect();
+
+        // Append precompile gas data.
+        for (&addr, &(count, gas_used)) in inspector.precompile_gas() {
+            if let Some(name) = metered_opcodes.precompiles.get(&addr) {
+                if count > 0 {
+                    opcode_gas.push(OpcodeGas {
+                        opcode: name.to_string(),
+                        count,
+                        gas_used,
+                    });
+                }
+            }
+        }
+
+        opcode_gas
     };
 
     // Calculate state root and measure its calculation time. If pending flashblocks were present,
@@ -557,7 +614,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         )?;
 
         assert!(output.results.is_empty());
@@ -613,7 +670,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         )?;
 
         assert_eq!(output.results.len(), 1);
@@ -686,7 +743,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         )?;
 
         assert_eq!(output.results.len(), 1);
@@ -735,7 +792,7 @@ mod tests {
         let parsed_bundle = create_parsed_bundle(vec![tx])?;
 
         let metered =
-            parse_opcode_names(&["SSTORE".to_string(), "SLOAD".to_string()]).unwrap();
+            parse_metered_names(&["SSTORE".to_string(), "SLOAD".to_string()]).unwrap();
 
         let output = meter_bundle(
             state_provider,
@@ -797,7 +854,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         )?;
 
         assert!(
@@ -842,7 +899,7 @@ mod tests {
         let parsed_bundle = create_parsed_bundle(vec![tx])?;
 
         // Only request SSTORE — other opcodes like PUSH, ADD, etc. should be filtered out.
-        let metered = parse_opcode_names(&["SSTORE".to_string()]).unwrap();
+        let metered = parse_metered_names(&["SSTORE".to_string()]).unwrap();
 
         let output = meter_bundle(
             state_provider,
@@ -868,18 +925,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_opcode_names_rejects_unknown() {
-        let result = parse_opcode_names(&["NOTAREALOPCODE".to_string()]);
+    fn parse_metered_names_rejects_unknown() {
+        let result = parse_metered_names(&["NOTAREALOPCODE".to_string()]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("NOTAREALOPCODE"));
     }
 
     #[test]
-    fn parse_opcode_names_case_insensitive() {
-        let result = parse_opcode_names(&["sstore".to_string(), "Sload".to_string()]);
+    fn parse_metered_names_case_insensitive() {
+        let result = parse_metered_names(&["sstore".to_string(), "Sload".to_string()]);
         assert!(result.is_ok());
-        let opcodes = result.unwrap();
-        assert_eq!(opcodes.len(), 2);
+        assert_eq!(result.unwrap().opcodes.len(), 2);
+    }
+
+    #[test]
+    fn parse_metered_names_recognizes_precompiles() {
+        let result = parse_metered_names(
+            &["SSTORE".to_string(), "BLAKE2F".to_string(), "ECREC".to_string()],
+        );
+        assert!(result.is_ok());
+        let metered = result.unwrap();
+        assert_eq!(metered.opcodes.len(), 1);
+        assert_eq!(metered.precompiles.len(), 2);
+        assert!(metered.precompiles.values().any(|n| n == "BLAKE2F"));
+        assert!(metered.precompiles.values().any(|n| n == "ECREC"));
     }
 
     #[tokio::test]
@@ -908,7 +977,7 @@ mod tests {
             None,
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         )
         .expect_err("missing parent beacon block root should fail");
         assert!(
@@ -929,7 +998,7 @@ mod tests {
             Some(header.parent_beacon_block_root().unwrap_or(B256::ZERO)),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         )?;
 
         assert!(output.total_time_us > 0);
@@ -997,7 +1066,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         )?;
 
         assert_eq!(output.results.len(), 2);
@@ -1078,7 +1147,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         )?;
 
         // Verify invariant: total time must include state root time
@@ -1135,7 +1204,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         );
 
         assert!(
@@ -1218,7 +1287,7 @@ mod tests {
             header.parent_beacon_block_root(),
             Some(pending_state),
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         );
 
         assert!(
@@ -1323,7 +1392,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         );
 
         assert!(result.is_err(), "Nonce exceeding MAX_NONCE_AHEAD should fail");
@@ -1377,7 +1446,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         );
 
         assert!(
@@ -1436,7 +1505,7 @@ mod tests {
             header.parent_beacon_block_root(),
             None,
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         );
 
         assert!(result.is_err());
@@ -1526,7 +1595,7 @@ mod tests {
             header.parent_beacon_block_root(),
             Some(pending_state),
             L1BlockInfo::default(),
-            &HashSet::new(),
+            &MeteredOpcodes::default(),
         )?;
 
         assert_eq!(output.results.len(), 1);

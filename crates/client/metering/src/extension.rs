@@ -1,14 +1,15 @@
 //! Contains the [`MeteringExtension`] which wires up the metering RPC surface
 //! on the Base node builder.
 
-use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroUsize, sync::Arc};
 
 use alloy_primitives::U256;
 use base_flashblocks::{FlashblocksAPI, FlashblocksConfig, FlashblocksState};
 use base_node_runner::{BaseNodeExtension, FromExtensionConfig, NodeHooks};
 use parking_lot::RwLock;
-use revm_bytecode::opcode::OpCode;
 use tracing::{debug, info, warn};
+
+use crate::MeteredOpcodes;
 
 use crate::{
     DEFAULT_PENDING_STATE_ROOT_TIMES_CAPACITY, MeteringApiImpl, MeteringApiServer, MeteringCache,
@@ -82,8 +83,8 @@ pub struct MeteringExtension {
     /// Must be greater than zero when set. Required when gas, state root time,
     /// or DA priority fee estimation is enabled.
     pub target_flashblocks_per_block: Option<usize>,
-    /// Opcodes to track for gas metering.
-    pub metered_opcodes: HashSet<OpCode>,
+    /// Opcodes and precompiles to track for gas metering.
+    pub metered_opcodes: MeteredOpcodes,
 }
 
 impl Default for MeteringExtension {
@@ -96,7 +97,7 @@ impl Default for MeteringExtension {
             uncongested_priority_fee: 1_000_000,
             cache_size: 12,
             target_flashblocks_per_block: None,
-            metered_opcodes: HashSet::new(),
+            metered_opcodes: MeteredOpcodes::default(),
         }
     }
 }
@@ -117,7 +118,7 @@ impl MeteringExtension {
             uncongested_priority_fee: 1_000_000,
             cache_size: 12,
             target_flashblocks_per_block: None,
-            metered_opcodes: HashSet::new(),
+            metered_opcodes: MeteredOpcodes::default(),
         }
     }
 
@@ -152,8 +153,8 @@ impl MeteringExtension {
         self
     }
 
-    /// Sets the opcodes to track for gas metering.
-    pub fn with_metered_opcodes(mut self, opcodes: HashSet<OpCode>) -> Self {
+    /// Sets the opcodes and precompiles to track for gas metering.
+    pub fn with_metered_opcodes(mut self, opcodes: MeteredOpcodes) -> Self {
         self.metered_opcodes = opcodes;
         self
     }
@@ -306,8 +307,8 @@ pub struct MeteringConfig {
     /// Must be greater than zero when set. Required when gas, state root time,
     /// or DA priority fee estimation is enabled.
     pub target_flashblocks_per_block: Option<usize>,
-    /// Opcodes to track for gas metering.
-    pub metered_opcodes: HashSet<OpCode>,
+    /// Opcodes and precompiles to track for gas metering.
+    pub metered_opcodes: MeteredOpcodes,
 }
 
 impl MeteringConfig {
@@ -331,7 +332,7 @@ impl MeteringConfig {
             uncongested_priority_fee: 1_000_000,
             cache_size: 12,
             target_flashblocks_per_block: None,
-            metered_opcodes: HashSet::new(),
+            metered_opcodes: MeteredOpcodes::default(),
         }
     }
 
@@ -350,7 +351,7 @@ impl MeteringConfig {
             uncongested_priority_fee: 1_000_000,
             cache_size: 12,
             target_flashblocks_per_block: None,
-            metered_opcodes: HashSet::new(),
+            metered_opcodes: MeteredOpcodes::default(),
         }
     }
 
@@ -385,8 +386,8 @@ impl MeteringConfig {
         self
     }
 
-    /// Sets the opcodes to track for gas metering.
-    pub fn with_metered_opcodes(mut self, opcodes: HashSet<OpCode>) -> Self {
+    /// Sets the opcodes and precompiles to track for gas metering.
+    pub fn with_metered_opcodes(mut self, opcodes: MeteredOpcodes) -> Self {
         self.metered_opcodes = opcodes;
         self
     }

@@ -1,11 +1,8 @@
 //! Implementation of the metering RPC API.
 
-use std::{
-    collections::HashSet,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use alloy_consensus::{BlockHeader, Header, Sealed};
@@ -24,7 +21,6 @@ use reth_primitives_traits::SealedHeader;
 use reth_provider::{
     BlockReader, BlockReaderIdExt, ChainSpecProvider, HeaderProvider, StateProviderFactory,
 };
-use revm_bytecode::opcode::OpCode;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -46,9 +42,9 @@ pub struct MeteringApiImpl<Provider, FB> {
     state_root_cache: Option<Arc<RwLock<PendingStateRootTimes>>>,
     /// Whether metering data collection is enabled.
     metering_enabled: Arc<AtomicBool>,
-    /// Opcodes to track for gas metering. When non-empty, an
-    /// `OpcodeGasInspector` is attached during bundle execution.
-    metered_opcodes: Arc<HashSet<OpCode>>,
+    /// Opcodes and precompiles to track for gas metering. When non-empty, a
+    /// `MeteringInspector` is attached during bundle execution.
+    metered_opcodes: Arc<crate::MeteredOpcodes>,
 }
 
 impl<Provider, FB> std::fmt::Debug for MeteringApiImpl<Provider, FB> {
@@ -73,7 +69,7 @@ where
     pub fn new(
         provider: Provider,
         flashblocks_api: Arc<FB>,
-        metered_opcodes: Arc<HashSet<OpCode>>,
+        metered_opcodes: Arc<crate::MeteredOpcodes>,
     ) -> Self {
         Self {
             provider,
@@ -92,7 +88,7 @@ where
         flashblocks_api: Arc<FB>,
         estimator: Arc<PriorityFeeEstimator>,
         state_root_cache: Arc<RwLock<PendingStateRootTimes>>,
-        metered_opcodes: Arc<HashSet<OpCode>>,
+        metered_opcodes: Arc<crate::MeteredOpcodes>,
     ) -> Self {
         Self {
             provider,
