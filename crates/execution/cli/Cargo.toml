@@ -24,6 +24,7 @@ reth-network-p2p.workspace = true
 reth-cli-commands.workspace = true
 reth-network-peers.workspace = true
 reth-rpc-server-types.workspace = true
+reth-tasks.workspace = true
 reth-db = { workspace = true, features = ["mdbx"] }
 
 # so jemalloc metrics can be included
