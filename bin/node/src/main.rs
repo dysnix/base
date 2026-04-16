@@ -48,14 +48,14 @@ fn main() {
             state_root_time_us: args.metering_state_root_time_us,
             da_bytes: args.metering_da_bytes,
         };
-        let metered_opcodes = if args.metering_metered_opcodes.is_empty() {
-            MeteredOpcodes::default()
-        } else {
-            MeteredOpcodes::parse(&args.metering_metered_opcodes)?
-        }
-        .with_all_precompiles();
-
         let metering_config = if args.enable_metering {
+            let metered_opcodes = if args.metering_metered_opcodes.is_empty() {
+                MeteredOpcodes::default()
+            } else {
+                MeteredOpcodes::parse(&args.metering_metered_opcodes)?
+            }
+            .with_all_precompiles();
+
             let mut config = flashblocks_config
                 .clone()
                 .map_or_else(MeteringConfig::enabled, MeteringConfig::with_flashblocks)

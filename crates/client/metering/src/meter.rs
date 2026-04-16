@@ -390,7 +390,7 @@ where
         let evm_config = BaseEvmConfig::base(chain_spec);
         let evm_env = evm_config.next_evm_env(header, &attributes)?;
         let precompile_addrs = metered_opcodes.precompiles.keys().copied().collect();
-        let inspector = MeteringInspector::new(precompile_addrs);
+        let inspector = MeteringInspector::new(precompile_addrs, metered_opcodes.opcodes.clone());
         let evm = evm_config.evm_with_env_and_inspector(&mut db, evm_env, inspector);
         let ctx = evm_config.context_for_next_block(header, attributes)?;
         let mut builder = evm_config.create_block_builder(evm, header, ctx);
