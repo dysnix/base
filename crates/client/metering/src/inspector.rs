@@ -10,6 +10,15 @@ use revm::{
 };
 use revm_inspectors::opcode::OpcodeGasInspector;
 
+/// Accumulated gas data for a single precompile address.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct PrecompileGasUsage {
+    /// Number of calls to this precompile.
+    pub(crate) count: u64,
+    /// Total gas consumed across all calls.
+    pub(crate) gas_used: u64,
+}
+
 /// EVM inspector that tracks per-opcode gas usage and precompile call costs.
 ///
 /// Wraps [`OpcodeGasInspector`] for opcode-level tracking and adds gas
@@ -19,7 +28,7 @@ use revm_inspectors::opcode::OpcodeGasInspector;
 #[derive(Debug)]
 pub(crate) struct MeteringInspector {
     inner: OpcodeGasInspector,
-    precompile_gas: HashMap<Address, (u64, u64)>,
+    precompile_gas: HashMap<Address, PrecompileGasUsage>,
     metered_precompiles: HashSet<Address>,
 }
 
@@ -43,7 +52,7 @@ impl MeteringInspector {
     /// Extracts the accumulated precompile gas data and resets the map.
     ///
     /// Call this after each transaction to get per-transaction precompile data.
-    pub(crate) fn take_precompile_gas(&mut self) -> HashMap<Address, (u64, u64)> {
+    pub(crate) fn take_precompile_gas(&mut self) -> HashMap<Address, PrecompileGasUsage> {
         std::mem::take(&mut self.precompile_gas)
     }
 }
@@ -72,8 +81,8 @@ where
         if self.metered_precompiles.contains(&target) {
             let gas_used = outcome.result.gas.spent();
             let entry = self.precompile_gas.entry(target).or_default();
-            entry.0 += 1;
-            entry.1 += gas_used;
+            entry.count += 1;
+            entry.gas_used += gas_used;
         }
     }
 

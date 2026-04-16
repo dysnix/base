@@ -534,14 +534,14 @@ where
                 })
                 .collect();
 
-            for (addr, (count, precompile_gas_used)) in &precompile_data {
+            for (addr, usage) in &precompile_data {
                 if let Some(name) = metered_opcodes.precompiles.get(addr)
-                    && *count > 0
+                    && usage.count > 0
                 {
                     opcode_gas.push(OpcodeGas {
                         opcode: name.clone(),
-                        count: *count,
-                        gas_used: *precompile_gas_used,
+                        count: usage.count,
+                        gas_used: usage.gas_used,
                     });
                 }
             }
@@ -863,7 +863,7 @@ mod tests {
             .input(SimpleStorage::setValueCall { v: U256::from(42) }.abi_encode())
             .into_eip1559();
 
-        let tx = OpTransactionSigned::Eip1559(
+        let tx = BaseTransactionSigned::Eip1559(
             signed_tx.as_eip1559().expect("eip1559 transaction").clone(),
         );
 
@@ -918,7 +918,7 @@ mod tests {
             .max_priority_fee_per_gas(1)
             .into_eip1559();
 
-        let tx = OpTransactionSigned::Eip1559(
+        let tx = BaseTransactionSigned::Eip1559(
             signed_tx.as_eip1559().expect("eip1559 transaction").clone(),
         );
 
@@ -970,7 +970,7 @@ mod tests {
             .input(SimpleStorage::setValueCall { v: U256::from(42) }.abi_encode())
             .into_eip1559();
 
-        let tx = OpTransactionSigned::Eip1559(
+        let tx = BaseTransactionSigned::Eip1559(
             signed_tx.as_eip1559().expect("eip1559 transaction").clone(),
         );
 
