@@ -18,10 +18,7 @@ use base_common_consensus::{BaseReceipt, BaseTransactionSigned, DepositReceipt, 
 use base_common_evm::{BaseReceiptBuilder, L1BlockInfo, OpSpecId};
 use base_execution_chainspec::BaseChainSpec;
 use base_execution_evm::{BaseEvmConfig, BaseNextBlockEnvAttributes};
-use base_execution_payload_builder::{
-    OpPayloadBuilderAttributes, error::BasePayloadBuilderError,
-    payload::EthPayloadBuilderAttributes,
-};
+use base_execution_payload_builder::{OpPayloadBuilderAttributes, error::BasePayloadBuilderError};
 use base_execution_txpool::{
     BundleTransaction, TimestampedTransaction, estimated_da_size::DataAvailabilitySized,
 };
@@ -43,7 +40,7 @@ use tracing::{debug, error, trace, warn};
 
 use crate::{
     BuilderConfig, BuilderMetrics, ExecutionInfo, ExecutionMeteringLimitExceeded, PayloadTxsBounds,
-    ResourceLimits, TxResources, TxnExecutionError, TxnOutcome,
+    ResourceLimits, TxResources, TxnExecutionError, TxnOutcome, flashblocks::BuilderStateHook,
 };
 
 /// Records the priority fee of a rejected transaction with the given reason as a label.
@@ -538,6 +535,7 @@ impl BasePayloadBuilderCtx {
     pub(super) fn execute_sequencer_transactions(
         &self,
         db: &mut State<impl Database>,
+        state_hook: Option<&BuilderStateHook>,
     ) -> Result<ExecutionInfo, PayloadBuilderError> {
         let mut info = ExecutionInfo::with_capacity(self.attributes().transactions.len());
 
@@ -614,6 +612,10 @@ impl BasePayloadBuilderCtx {
 
             info.receipts.push(self.build_receipt(ctx, depositor_nonce));
 
+            if let Some(state_hook) = state_hook {
+                state_hook.send_state_update(&state);
+            }
+
             // commit changes
             evm.db_mut().commit(state);
 
@@ -653,6 +655,7 @@ impl BasePayloadBuilderCtx {
         db: &mut State<impl Database>,
         best_txs: &mut impl PayloadTxsBounds,
         limits: &ResourceLimits,
+        state_hook: Option<&BuilderStateHook>,
     ) -> Result<FlashblockDiagnostics, PayloadBuilderError> {
         let execute_txs_start_time = Instant::now();
         let mut num_txs_considered = 0;
@@ -1008,6 +1011,10 @@ impl BasePayloadBuilderCtx {
             };
             info.receipts.push(self.build_receipt(ctx, None));
 
+            if let Some(state_hook) = state_hook {
+                state_hook.send_state_update(&state);
+            }
+
             // commit changes
             evm.db_mut().commit(state);
 
@@ -1119,6 +1126,8 @@ impl BasePayloadBuilderCtx {
     /// Derives the EVM environment from the given chain spec and parent header,
     /// using default builder attributes and a no-op cancellation token.
     pub fn for_test(chain_spec: Arc<BaseChainSpec>, parent: Arc<SealedHeader>) -> Self {
+        use base_execution_payload_builder::payload::EthPayloadBuilderAttributes;
+
         let evm_config = BaseEvmConfig::base(Arc::clone(&chain_spec));
         let timestamp = parent.timestamp + 2;
 
