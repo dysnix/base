@@ -835,8 +835,8 @@ mod tests {
     async fn meter_bundle_opcode_gas_for_create() -> eyre::Result<()> {
         let harness = TestHarness::new().await?;
 
-        let (factory_deployment_tx, factory_address, _) = Account::Deployer
-            .create_deployment_tx(ContractFactory::BYTECODE.clone(), 0)?;
+        let (factory_deployment_tx, factory_address, _) =
+            Account::Deployer.create_deployment_tx(ContractFactory::BYTECODE.clone(), 0)?;
         harness.build_block_from_transactions(vec![factory_deployment_tx]).await?;
 
         let latest = harness.latest_block();
@@ -851,10 +851,8 @@ mod tests {
             .max_fee_per_gas(MIN_BASEFEE as u128)
             .max_priority_fee_per_gas(0)
             .input(
-                ContractFactory::deployWithCreateCall {
-                    bytecode: SimpleStorage::BYTECODE.clone(),
-                }
-                .abi_encode(),
+                ContractFactory::deployWithCreateCall { bytecode: SimpleStorage::BYTECODE.clone() }
+                    .abi_encode(),
             )
             .into_eip1559();
 
@@ -1031,8 +1029,7 @@ mod tests {
     fn metered_opcodes_parse_recognizes_azul_additions() {
         // CLZ opcode (EIP-7939) and P256VERIFY precompile gas-cost change (EIP-7951)
         // are the new metering surfaces introduced by Azul.
-        let result =
-            MeteredOpcodes::parse(&["CLZ".to_string(), "P256VERIFY".to_string()]).unwrap();
+        let result = MeteredOpcodes::parse(&["CLZ".to_string(), "P256VERIFY".to_string()]).unwrap();
         assert_eq!(result.opcodes.len(), 1, "CLZ should be recognized as an opcode");
         assert!(result.precompiles.values().any(|n| n == "P256VERIFY"));
     }
@@ -1080,7 +1077,7 @@ mod tests {
             state_provider: state_provider2,
             chain_spec: harness.chain_spec(),
             bundle: parsed_bundle,
-            header: sealed_without_root.clone(),
+            header: sealed_without_root,
             parent_beacon_block_root: Some(header.parent_beacon_block_root().unwrap_or(B256::ZERO)),
             pending_state: None,
             l1_block_info: L1BlockInfo::default(),
