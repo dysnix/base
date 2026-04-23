@@ -136,6 +136,22 @@ async fn run_load_test(args: Vec<String>) -> Result<()> {
 
     let mut runner = LoadRunner::new(load_config.clone())?;
 
+    if let Some(recipient_offset) = runner.recipient_offset() {
+        if test_config.mnemonic.is_some() {
+            println!(
+                "Fresh-recipient mode: recipient_offset={recipient_offset} \
+                 (recover with AccountPool::from_mnemonic(mnemonic, n, recipient_offset))",
+            );
+        } else {
+            println!(
+                "Fresh-recipient mode: seed={} recipient_offset={recipient_offset} \
+                 (recover with AccountPool::with_offset(seed, n, recipient_offset))",
+                load_config.seed,
+            );
+        }
+        println!();
+    }
+
     // Install signal handler before any long-running work. First signal sets
     // the stop flag so `run()` exits its loop gracefully and the drain sequence
     // runs. A second signal force-exits.

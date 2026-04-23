@@ -91,6 +91,10 @@ pub struct LoadConfig {
     pub block_watcher_url: Option<Url>,
     /// WebSocket URL for flashblocks subscription.
     pub flashblocks_ws_url: Option<Url>,
+    /// If `true`, draw a fresh recipient address per transaction from a
+    /// seeded RNG instead of cycling through the sender pool. Used to drive
+    /// account-trie fan-out for `transfer` / `calldata` workloads.
+    pub fresh_recipients: bool,
 }
 
 impl LoadConfig {
@@ -116,6 +120,7 @@ impl LoadConfig {
             flashblocks_ws_url: Some(
                 "ws://localhost:7111".parse().expect("valid default flashblocks_ws_url"),
             ),
+            fresh_recipients: false,
         }
     }
 
