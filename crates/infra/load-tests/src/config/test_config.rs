@@ -227,6 +227,49 @@ pub enum TxTypeConfig {
         /// Target Osaka feature.
         target: OsakaTarget,
     },
+
+    /// Generic resource-stress payload that calls `Simulator.run(SimulatorConfig)`
+    /// on the deployed `Simulator` contract from `base/benchmark`. Each field
+    /// below maps 1:1 to the corresponding field on the on-chain config struct.
+    Simulator {
+        /// Address of the deployed `Simulator` contract.
+        target: String,
+        /// Gas limit per generated transaction.
+        gas_limit: u64,
+        /// Number of `BALANCE`-load ops on existing accounts.
+        #[serde(default)]
+        load_accounts: u64,
+        /// Number of `send(1)` updates to existing accounts.
+        #[serde(default)]
+        update_accounts: u64,
+        /// Number of newly-created accounts (one new account-trie entry each).
+        #[serde(default)]
+        create_accounts: u64,
+        /// Number of `SLOAD` ops on existing slots.
+        #[serde(default)]
+        load_storage: u64,
+        /// Number of `SSTORE` ops on existing slots.
+        #[serde(default)]
+        update_storage: u64,
+        /// Number of `SSTORE`-to-zero ops on existing slots.
+        #[serde(default)]
+        delete_storage: u64,
+        /// Number of newly-written storage slots (one new storage-trie entry each).
+        #[serde(default)]
+        create_storage: u64,
+        /// Optional precompile mix.
+        #[serde(default)]
+        precompiles: Vec<SimulatorPrecompileConfig>,
+    },
+}
+
+/// Per-precompile entry in the simulator config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulatorPrecompileConfig {
+    /// Precompile address (e.g. `"0x0000000000000000000000000000000000000009"` for blake2f).
+    pub address: String,
+    /// Number of calls to that precompile per `run`.
+    pub num_calls: u64,
 }
 
 const fn default_calldata_size() -> usize {
@@ -411,6 +454,48 @@ impl TestConfig {
                 }
             }
             TxTypeConfig::Osaka { target } => TxType::Osaka { target: target.clone() },
+            TxTypeConfig::Simulator {
+                target,
+                gas_limit,
+                load_accounts,
+                update_accounts,
+                create_accounts,
+                load_storage,
+                update_storage,
+                delete_storage,
+                create_storage,
+                precompiles,
+            } => {
+                let target_addr = target.parse::<Address>().map_err(|e| {
+                    BaselineError::Config(format!("invalid simulator target '{target}': {e}"))
+                })?;
+                let precompiles = precompiles
+                    .iter()
+                    .map(|p| {
+                        let addr = p.address.parse::<Address>().map_err(|e| {
+                            BaselineError::Config(format!(
+                                "invalid simulator precompile address '{}': {e}",
+                                p.address
+                            ))
+                        })?;
+                        Ok(crate::workload::SimulatorPrecompile {
+                            address: addr,
+                            num_calls: p.num_calls,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let ops = crate::workload::SimulatorOps {
+                    load_accounts: *load_accounts,
+                    update_accounts: *update_accounts,
+                    create_accounts: *create_accounts,
+                    load_storage: *load_storage,
+                    update_storage: *update_storage,
+                    delete_storage: *delete_storage,
+                    create_storage: *create_storage,
+                    precompiles,
+                };
+                TxType::Simulator { target: target_addr, ops, gas_limit: *gas_limit }
+            }
         };
         Ok(TxConfig { weight: weighted.weight, tx_type })
     }
@@ -559,6 +644,55 @@ transactions:
         }
 
         assert!(config.looper_contract.is_some());
+    }
+
+    #[test]
+    fn parse_simulator_config() {
+        let yaml = r#"
+rpc: http://localhost:8545
+transactions:
+  - weight: 100
+    type: simulator
+    target: "0xee1dc3309A40a5645769bFCEF90f4131af626f19"
+    gas_limit: 16700000
+    create_accounts: 470
+    precompiles:
+      - address: "0x0000000000000000000000000000000000000009"
+        num_calls: 100
+"#;
+        let config = TestConfig::from_yaml(yaml).unwrap();
+        assert_eq!(config.transactions.len(), 1);
+
+        let load_config = config.to_load_config(Some(1337)).unwrap();
+        match &load_config.transactions[0].tx_type {
+            TxType::Simulator { target, ops, gas_limit } => {
+                let expected: Address =
+                    "0xee1dc3309A40a5645769bFCEF90f4131af626f19".parse().unwrap();
+                assert_eq!(*target, expected);
+                assert_eq!(*gas_limit, 16_700_000);
+                assert_eq!(ops.create_accounts, 470);
+                assert_eq!(ops.create_storage, 0);
+                assert_eq!(ops.precompiles.len(), 1);
+                assert_eq!(ops.precompiles[0].num_calls, 100);
+            }
+            _ => panic!("expected runner TxType::Simulator"),
+        }
+    }
+
+    #[test]
+    fn parse_simulator_config_rejects_bad_address() {
+        let yaml = r#"
+rpc: http://localhost:8545
+transactions:
+  - weight: 100
+    type: simulator
+    target: "not-an-address"
+    gas_limit: 16700000
+    create_accounts: 470
+"#;
+        let config = TestConfig::from_yaml(yaml).unwrap();
+        let err = config.to_load_config(Some(1337)).unwrap_err();
+        assert!(err.to_string().contains("simulator"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use url::Url;
 use crate::{
     config::OsakaTarget,
     utils::{BaselineError, Result},
+    workload::SimulatorOps,
 };
 
 /// Configuration for a single transaction type with its weight.
@@ -52,6 +53,16 @@ pub enum TxType {
     Osaka {
         /// Target Osaka feature.
         target: OsakaTarget,
+    },
+    /// Generic resource-stress payload that calls `Simulator.run(SimulatorConfig)`
+    /// on the deployed `Simulator` contract from `base/benchmark`.
+    Simulator {
+        /// Address of the deployed `Simulator` contract.
+        target: Address,
+        /// Per-call op counts forwarded to `Simulator.run`.
+        ops: SimulatorOps,
+        /// Gas limit per generated transaction.
+        gas_limit: u64,
     },
 }
 

@@ -29,6 +29,9 @@ pub use uniswap::{UniswapV2Payload, UniswapV3Payload};
 mod osaka;
 pub use osaka::OsakaPayload;
 
+mod simulator;
+pub use simulator::{SimulatorOps, SimulatorPayload, SimulatorPrecompile};
+
 /// A transaction payload generator.
 pub trait Payload: Send + Sync + std::fmt::Debug {
     /// Returns the name of this payload type.

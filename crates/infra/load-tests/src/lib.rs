@@ -4,7 +4,8 @@
 
 mod config;
 pub use config::{
-    OsakaTarget, PrecompileTarget, TestConfig, TxTypeConfig, WeightedTxType, WorkloadConfig,
+    OsakaTarget, PrecompileTarget, SimulatorPrecompileConfig, TestConfig, TxTypeConfig,
+    WeightedTxType, WorkloadConfig,
 };
 
 mod devnet;
@@ -25,8 +26,9 @@ pub use metrics::{
 mod workload;
 pub use workload::{
     AccountPool, CalldataPayload, Erc20Payload, FundedAccount, OsakaPayload, Payload,
-    PrecompileLooper, PrecompilePayload, SeededRng, StoragePayload, TransferPayload,
-    UniswapV2Payload, UniswapV3Payload, WorkloadGenerator, parse_precompile_id,
+    PrecompileLooper, PrecompilePayload, SeededRng, SimulatorOps, SimulatorPayload,
+    SimulatorPrecompile, StoragePayload, TransferPayload, UniswapV2Payload, UniswapV3Payload,
+    WorkloadGenerator, parse_precompile_id,
 };
 
 mod runner;

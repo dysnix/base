@@ -1892,6 +1892,11 @@ fn format_tx_type(tx_type: &TxTypeConfig) -> String {
             };
             format!("osaka {t}")
         }
+        TxTypeConfig::Simulator { create_accounts, create_storage, .. } => {
+            format!(
+                "simulator (create_accounts={create_accounts}, create_storage={create_storage})"
+            )
+        }
     }
 }
 
