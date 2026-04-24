@@ -5,7 +5,10 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use clap::Parser;
 use reth_cli_util::{get_secret_key, load_secret_key::rng_secret_key};
 use reth_discv4::{DiscoveryUpdate, Discv4, Discv4Config};
-use reth_discv5::{Config, Discv5, discv5::{Event, enr::NodeId}};
+use reth_discv5::{
+    Config, Discv5,
+    discv5::{Event, enr::NodeId},
+};
 use reth_net_nat::{NatResolver, external_addr_with};
 use reth_network_peers::NodeRecord;
 use secp256k1::SecretKey;
