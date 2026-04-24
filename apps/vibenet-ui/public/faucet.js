@@ -118,4 +118,7 @@ form.addEventListener("submit", async (ev) => {
   }
 });
 
+const explorerNav = document.getElementById("explorer-nav");
+if (explorerNav) explorerNav.href = buildExplorerUrl();
+
 loadStatus();

@@ -110,8 +110,8 @@ async function main() {
   explorerEl.href = explorerUrl;
   explorerEl.textContent = explorerUrl;
 
-  const rpcLink = document.getElementById("rpc-link");
-  if (rpcLink) rpcLink.href = rpcUrl;
+  const explorerNav = document.getElementById("explorer-nav");
+  if (explorerNav) explorerNav.href = explorerUrl;
 
   const instructionsEl = document.getElementById("instructions");
   const rendered = window.marked
