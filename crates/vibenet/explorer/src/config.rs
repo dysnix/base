@@ -27,7 +27,7 @@ pub struct ExplorerConfig {
     /// Number of blocks to fetch in parallel during backfill.
     pub backfill_concurrency: usize,
     /// Base URL the UI surfaces as the RPC endpoint (e.g.
-    /// `https://vibenet-rpc.base.org/rpc/<key>`). Optional; only used for
+    /// `https://vibenet-rpc.base.org`). Optional; only used for
     /// the "connect your wallet" hints on the home page.
     pub public_rpc_url: Option<String>,
     /// Git branch / commit strings for the footer.

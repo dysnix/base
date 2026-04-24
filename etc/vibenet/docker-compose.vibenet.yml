@@ -8,7 +8,6 @@
 # Layers on:
 #   - FAUCET_ADDR propagated into setup-l1 so the faucet EOA is prefunded on L1.
 #   - nginx-gateway: public HTTP gateway, host-routed and rate-limited.
-#   - cloudflared: outbound-only tunnel to Cloudflare for TLS.
 #   - vibenet-faucet: axum service, private to the docker network.
 #   - vibenet-setup: one-shot. Sweeps anvil balances -> faucet on L2, then
 #     deploys demo contracts and writes /shared/contracts.json.
@@ -17,6 +16,11 @@
 #     sqlite and reads full bodies from base-client on demand. Listens on
 #     :8080 internally; nginx terminates the `vibenet-explorer.base.org`
 #     server block to it.
+#
+# In production, public traffic arrives at a corporate proxy on approved
+# hardware which forwards to this container's `:8443` origin listener (enabled
+# via the `docker-compose.origin.yml` overlay). See
+# `etc/vibenet/deploy/DESIGN.md` for the end-to-end architecture.
 
 services:
   # --- Prefund the faucet on L1 via the existing setup-l1 anvil genesis ----
@@ -59,9 +63,9 @@ services:
   nginx-gateway:
     image: nginx:1.27-alpine
     container_name: vibenet-nginx
-    # Loopback-only host ports for local dev. Cloudflare reaches nginx via the
-    # docker network in production; these bindings are harmless there because
-    # the production host firewall denies inbound ports anyway.
+    # Loopback-only host ports for local dev. In production the public `:8443`
+    # origin listener is added by `docker-compose.origin.yml` and published to
+    # the corp-proxy-reachable IP; these 1808x bindings stay loopback-only.
     #   ${VIBENET_HOST_PORT}          -> UI / faucet / admin     (:8080)
     #   ${VIBENET_RPC_HOST_PORT}      -> RPC / WS                 (:8081)
     #   ${VIBENET_EXPLORER_HOST_PORT} -> vibescan explorer         (:8082)
@@ -86,7 +90,6 @@ services:
         condition: service_started
     volumes:
       - ../vibenet/nginx/vibenet.conf.template:/etc/nginx/templates/default.conf.template:ro
-      - ../vibenet/nginx/cf-ips.conf:/etc/nginx/cf-ips.conf:ro
       - vibenet-htpasswd:/etc/nginx/htpasswd-dir:ro
       - vibenet-config:/srv/config:ro
       - vibenet-shared:/srv/shared:ro
@@ -119,18 +122,6 @@ services:
         fi
         chmod 644 /out/htpasswd
     restart: "no"
-
-  # --- Cloudflare Tunnel ----------------------------------------------------
-  cloudflared:
-    image: cloudflare/cloudflared:2025.10.1
-    container_name: vibenet-cloudflared
-    depends_on:
-      nginx-gateway:
-        condition: service_started
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
-    mem_limit: 256m
-    memswap_limit: 256m
-    restart: unless-stopped
 
   # --- Faucet service -------------------------------------------------------
   # Drips ETH and mints USDV. The shared volume is mounted read-only so the

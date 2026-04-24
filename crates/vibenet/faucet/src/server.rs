@@ -34,7 +34,12 @@ sol! {
     }
 }
 
-/// Header populated by Cloudflare that contains the true client IP.
+/// Header nginx attaches with the real client IP it derived from
+/// `X-Forwarded-For` after real_ip processing. Used as the primary signal.
+const X_REAL_IP: &str = "x-real-ip";
+
+/// Legacy header from the Cloudflare-tunnel era, kept as a fallback so old
+/// deployments that still inject it continue to bucket correctly.
 const CF_CONNECTING_IP: &str = "cf-connecting-ip";
 
 /// Top-level wrapper that owns the Tokio listener and the router.
@@ -246,15 +251,18 @@ async fn drip_usdv(
     }
 }
 
-/// Extract the real client IP. Prefers `CF-Connecting-IP` (set by the
-/// Cloudflare edge and preserved through the nginx gateway) and falls back to
-/// the direct TCP peer, which is the nginx container when we are deployed.
+/// Extract the real client IP. Prefers `X-Real-IP` (set by the nginx gateway
+/// after its real_ip_header/X-Forwarded-For processing), falls back to the
+/// legacy `CF-Connecting-IP` for old deployments, and finally to the direct
+/// TCP peer (which is the nginx container in any real deployment).
 fn client_ip(headers: &HeaderMap, peer: IpAddr) -> IpAddr {
-    if let Some(value) = headers.get(CF_CONNECTING_IP)
-        && let Ok(s) = value.to_str()
-        && let Ok(ip) = s.trim().parse::<IpAddr>()
-    {
-        return ip;
+    for header in [X_REAL_IP, CF_CONNECTING_IP] {
+        if let Some(value) = headers.get(header)
+            && let Ok(s) = value.to_str()
+            && let Ok(ip) = s.trim().parse::<IpAddr>()
+        {
+            return ip;
+        }
     }
     peer
 }

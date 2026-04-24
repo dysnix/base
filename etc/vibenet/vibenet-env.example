@@ -3,14 +3,17 @@
 # Copy this file to `etc/vibenet/vibenet-env` on the host and fill in the real
 # values. Never commit the populated file.
 
-# === Cloudflare Tunnel ===
-# Token from the Cloudflare Zero Trust dashboard for the vibenet tunnel.
-# Set up three hostnames in the tunnel config, all pointing at
-# http://nginx-gateway:8080 inside the docker network:
-#   - vibenet.base.org
-#   - vibenet-rpc.base.org
-#   - vibenet-explorer.base.org
-TUNNEL_TOKEN=eyJhIjoi...replace-me...
+# === Origin listener (production only) ===
+# On the production bare-metal host, a corporate proxy terminates public
+# traffic and forwards to nginx's :8443 TLS origin listener. That listener is
+# added by `docker-compose.origin.yml`, which `just vibe` auto-includes when
+# /etc/vibenet/origin/origin.env (written by vibenet-proxy's bootstrap-origin.sh)
+# is present.
+#
+# VIBENET_ORIGIN_BIND_ADDR is the host IP the origin port is published on.
+# Leave unset on laptops; set to the corp-proxy-reachable public IP on prod.
+# VIBENET_ORIGIN_BIND_ADDR=64.130.37.133
+# VIBENET_ORIGIN_PORT=8443
 
 # === Faucet ===
 # Address that funds every public drip. Prefunded with 10M ETH in the L1
@@ -48,7 +51,8 @@ VIBENET_CONTRACTS_YAML=etc/vibenet/setup/contracts.yaml
 
 # === Optional: local-dev host ports ===
 # Loopback-only bindings on `just vibe`. These are never reachable from the
-# public internet; Cloudflare talks to nginx over the docker network.
+# public internet; the corp proxy talks to nginx via the 8443 origin listener
+# configured by docker-compose.origin.yml.
 # VIBENET_HOST_PORT=18080           # UI + faucet + admin
 # VIBENET_RPC_HOST_PORT=18081       # RPC + WS
 # VIBENET_EXPLORER_HOST_PORT=18082  # vibescan block explorer
@@ -63,4 +67,8 @@ VIBENET_CONTRACTS_YAML=etc/vibenet/setup/contracts.yaml
 # VIBESCAN_BACKFILL_CONCURRENCY=16
 # Public RPC URL surfaced in the explorer footer so devs can copy it. Leave
 # empty to omit the footer row entirely.
-# VIBESCAN_PUBLIC_RPC_URL=https://vibenet-rpc.base.org/rpc
+# VIBESCAN_PUBLIC_RPC_URL=https://vibenet-rpc.base.org
+
+# === Optional: current vibenet env is still in use on the production host ===
+# The legacy `TUNNEL_TOKEN` variable has been removed; vibenet no longer runs
+# a cloudflared tunnel. If an older vibenet-env still has it, it's ignored.

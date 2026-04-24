@@ -1,0 +1,143 @@
+# Origin TLS listener for the corporate proxy.
+#
+# Activated by `etc/vibenet/docker-compose.origin.yml`. The overlay mounts
+# this file into /etc/nginx/templates/ so nginx:alpine's entrypoint runs
+# envsubst on it and writes /etc/nginx/conf.d/vibenet-origin.conf before
+# starting nginx.
+#
+# Each server block:
+#   - Listens on :8443 with the self-signed origin cert pinned by the corp
+#     proxy (both files written by vibenet-proxy/host/install/bootstrap-origin.sh).
+#   - Requires `X-Vibenet-Origin-Auth: ${VIBENET_ORIGIN_AUTH_SECRET}` on every
+#     request. Missing or mismatched → 403 before any upstream is contacted.
+#   - Routes by Host, matching the public hostnames the corp proxy forwards.
+#
+# Rate-limit zones (ui_ip, rpc_ip, faucet_ip), the $connection_upgrade map,
+# and the `limit_req_status 429;` directive are declared in
+# vibenet.conf.template which nginx loads from the same conf.d directory.
+
+# TLS baseline. Only applies to :8443 since no other listener uses ssl.
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_ciphers HIGH:!aNULL:!MD5;
+ssl_session_cache shared:SSL:10m;
+ssl_session_timeout 10m;
+
+# =============================================================================
+# vibenet.base.org origin - UI, faucet, admin
+# =============================================================================
+server {
+    listen 8443 ssl;
+    ssl_certificate     /etc/nginx/tls/vibenet-origin.crt;
+    ssl_certificate_key /etc/nginx/tls/vibenet-origin.key;
+    server_name vibenet.base.org;
+
+    if ($http_x_vibenet_origin_auth != "${VIBENET_ORIGIN_AUTH_SECRET}") {
+        return 403;
+    }
+
+    location = /config.json {
+        alias /srv/config/config.json;
+        add_header Cache-Control "no-store";
+        default_type application/json;
+    }
+
+    location = /contracts.json {
+        alias /srv/shared/contracts.json;
+        add_header Cache-Control "no-store";
+        default_type application/json;
+    }
+
+    location = /faucet/status {
+        limit_req zone=ui_ip burst=30 nodelay;
+        proxy_pass http://vibenet-faucet:8080/status;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location /faucet/ {
+        limit_req zone=faucet_ip burst=10 nodelay;
+        proxy_pass http://vibenet-faucet:8080/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location /admin/ {
+        auth_basic "vibenet admin";
+        auth_basic_user_file /etc/nginx/htpasswd-dir/htpasswd;
+        proxy_pass http://grafana:3000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location / {
+        limit_req zone=ui_ip burst=30 nodelay;
+        root /srv/ui;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+# =============================================================================
+# vibenet-rpc.base.org origin - JSON-RPC + WS
+# =============================================================================
+server {
+    listen 8443 ssl;
+    ssl_certificate     /etc/nginx/tls/vibenet-origin.crt;
+    ssl_certificate_key /etc/nginx/tls/vibenet-origin.key;
+    server_name vibenet-rpc.base.org;
+
+    if ($http_x_vibenet_origin_auth != "${VIBENET_ORIGIN_AUTH_SECRET}") {
+        return 403;
+    }
+
+    # JSON-RPC at the bare hostname. See vibenet.conf.template for details.
+    location = / {
+        limit_req zone=rpc_ip burst=30 nodelay;
+        proxy_pass http://proxyd:8080/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Content-Type "application/json";
+    }
+
+    location = /ws {
+        limit_req zone=rpc_ip burst=30 nodelay;
+        proxy_pass http://base-client:8546/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400s;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
+# =============================================================================
+# vibenet-explorer.base.org origin - vibescan
+# =============================================================================
+server {
+    listen 8443 ssl;
+    ssl_certificate     /etc/nginx/tls/vibenet-origin.crt;
+    ssl_certificate_key /etc/nginx/tls/vibenet-origin.key;
+    server_name vibenet-explorer.base.org;
+
+    if ($http_x_vibenet_origin_auth != "${VIBENET_ORIGIN_AUTH_SECRET}") {
+        return 403;
+    }
+
+    location / {
+        limit_req zone=ui_ip burst=30 nodelay;
+        proxy_pass http://vibescan:8080/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}

@@ -30,8 +30,9 @@ Exposes:
 
 ## Security
 
-- Real client IP is taken from `CF-Connecting-IP` (populated by Cloudflare +
-  the nginx gateway). If absent, the connecting peer IP is used instead.
+- Real client IP is taken from `X-Real-IP` (populated by the nginx gateway
+  after its `X-Forwarded-For` real_ip processing), falling back to the
+  legacy `CF-Connecting-IP` header and finally the connecting peer IP.
 - The private key is only ever read from the environment. It is never logged,
   emitted in errors, or surfaced through `/status`.
 - Cooldown state lives in memory only; restarting the service resets all

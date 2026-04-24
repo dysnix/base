@@ -27,18 +27,18 @@ function isLocalHost(host) {
 
 // RPC / WS / explorer URL builders. They branch on hostname because local
 // dev publishes the gateway on three sibling ports (ui:18080, rpc:18081,
-// explorer:18082) whereas prod uses three Cloudflare hostnames.
+// explorer:18082) whereas prod / dev route by hostname alone.
 function buildRpcUrl() {
   const host = location.hostname;
   if (isLocalHost(host)) {
     const uiPort = parseInt(location.port || "80", 10);
     const rpcPort = uiPort + 1;
-    return `${location.protocol}//${host}:${rpcPort}/rpc`;
+    return `${location.protocol}//${host}:${rpcPort}`;
   }
   const rpcHost = host.startsWith("vibenet.")
     ? host.replace(/^vibenet\./, "vibenet-rpc.")
     : "vibenet-rpc.base.org";
-  return `https://${rpcHost}/rpc`;
+  return `https://${rpcHost}`;
 }
 
 function buildWsUrl() {

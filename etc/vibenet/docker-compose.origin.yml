@@ -1,0 +1,39 @@
+# Origin overlay: exposes an 8443 TLS listener on nginx-gateway guarded by a
+# shared-secret header. Layered on top of docker-compose.vibenet.yml on the
+# production bare-metal host where vibenet is fronted by a corporate proxy.
+#
+# Requires the one-time host bootstrap from the vibenet-proxy repo, which
+# writes:
+#   /etc/vibenet/origin/tls/vibenet-origin.{crt,key}   (10y self-signed cert)
+#   /etc/vibenet/origin/origin.env                     (VIBENET_ORIGIN_AUTH_SECRET=...)
+#
+# The corp proxy pins this cert and calls https://<host>:8443/ with
+# `X-Vibenet-Origin-Auth: <secret>`. See etc/vibenet/deploy/DESIGN.md.
+#
+# Usage:
+#   docker compose \
+#     -f etc/docker/docker-compose.yml \
+#     -f etc/vibenet/docker-compose.vibenet.yml \
+#     -f etc/vibenet/docker-compose.origin.yml \
+#     up -d
+#
+# `just vibe` auto-discovers this overlay when /etc/vibenet/origin/origin.env
+# is present on the host, so normal operators don't need to pass it manually.
+
+services:
+  nginx-gateway:
+    # Publish the origin listener to the corp-proxy-reachable IP. Defaults to
+    # 127.0.0.1 so running this overlay on a laptop stays loopback-only; prod
+    # sets VIBENET_ORIGIN_BIND_ADDR to the host's public IP in vibenet-env.
+    ports:
+      - "${VIBENET_ORIGIN_BIND_ADDR:-127.0.0.1}:${VIBENET_ORIGIN_PORT:-8443}:8443"
+    # Origin identity lives at /etc/vibenet/origin/ on the host, outside the
+    # repo so it survives `git checkout` + `just vibe down -v`.
+    volumes:
+      - /etc/vibenet/origin/tls:/etc/nginx/tls:ro
+      - ../vibenet/nginx/vibenet-origin.conf.template:/etc/nginx/templates/vibenet-origin.conf.template:ro
+    env_file:
+      # Injects VIBENET_ORIGIN_AUTH_SECRET into the container env, which the
+      # nginx:alpine entrypoint expands into the rendered template via
+      # envsubst before starting nginx.
+      - /etc/vibenet/origin/origin.env

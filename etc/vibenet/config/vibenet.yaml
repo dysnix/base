@@ -18,11 +18,11 @@ instructions_markdown: |
   ## Connect your wallet
 
   - **Chain ID:** `84538453`
-  - **RPC URL:** `https://vibenet-rpc.base.org/rpc`
+  - **RPC URL:** `https://vibenet-rpc.base.org`
   - **WS URL:** `wss://vibenet-rpc.base.org/ws`
   - **Explorer:** [vibescan](https://vibenet-explorer.base.org/)
 
-  The RPC is currently open (no auth). Be gentle - IP-based rate limits apply.
+  The RPC is currently open - IP-based rate limits apply.
 
   ## Get test funds
 

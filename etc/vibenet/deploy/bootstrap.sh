@@ -2,9 +2,17 @@
 # Vibenet host bootstrap.
 #
 # Idempotent script for an Ubuntu/Debian bare-metal host that will run vibenet.
-# Installs Docker, Just, and Foundry CLI; tightens the firewall to SSH only
-# (cloudflared handles inbound traffic over its outbound tunnel, so we never
-# need to open 80/443); and prints next steps.
+# Installs Docker, Just, and Foundry CLI; tightens the firewall to SSH +
+# inbound 8443/8445 from the corp-proxy egress CIDR only; and prints next
+# steps.
+#
+# After this runs you still need to:
+#   1. Run vibenet-proxy/host/install/bootstrap-origin.sh (origin TLS cert +
+#      shared secret at /etc/vibenet/origin/).
+#   2. Run vibenet-proxy/host/install/install-deploy-controller.sh (systemd
+#      unit on :8445 that accepts branch-switch requests from the corp proxy).
+#
+# See etc/vibenet/deploy/README.md and etc/vibenet/deploy/DESIGN.md.
 #
 # Usage (as root on the target host):
 #   curl -fsSL https://raw.githubusercontent.com/base/base/<branch>/etc/vibenet/deploy/bootstrap.sh | sudo bash
@@ -14,6 +22,8 @@
 #   VIBENET_REPO_URL       git repo to clone (default: https://github.com/base/base.git)
 #   VIBENET_REPO_BRANCH    branch to check out (default: main)
 #   VIBENET_CHECKOUT_DIR   where to clone (default: /opt/vibenet/base)
+#   VIBENET_CORP_CIDR      corp-proxy egress CIDR allowed to reach 8443/8445
+#                          (default: unset; skips those ufw rules)
 
 set -euo pipefail
 
@@ -85,12 +95,20 @@ else
   log "checkout already exists at ${VIBENET_CHECKOUT_DIR}"
 fi
 
-# --- 7. firewall: ssh only; cloudflared handles inbound traffic --------------
-log "configuring ufw: allow ssh, deny everything else inbound"
+# --- 7. firewall: ssh + origin/deploy ports restricted to corp proxy ---------
+log "configuring ufw"
 ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow OpenSSH
+if [ -n "${VIBENET_CORP_CIDR:-}" ]; then
+  log "allowing tcp 8443 (origin) and 8445 (deploy) from ${VIBENET_CORP_CIDR}"
+  ufw allow from "${VIBENET_CORP_CIDR}" to any port 8443 proto tcp
+  ufw allow from "${VIBENET_CORP_CIDR}" to any port 8445 proto tcp
+else
+  log "WARNING: VIBENET_CORP_CIDR unset; 8443/8445 not opened."
+  log "         Add ufw allow rules manually before wiring up the corp proxy."
+fi
 ufw --force enable
 
 # --- 8. vibenet-env skeleton --------------------------------------------------
@@ -107,14 +125,23 @@ cat <<EOF
 =============================================================================
 vibenet host bootstrap complete.
 
-Next steps (as ${VIBENET_USER}):
+Next steps:
 
-  su - ${VIBENET_USER}
-  cd ${VIBENET_CHECKOUT_DIR}
-  \$EDITOR etc/vibenet/vibenet-env   # fill in TUNNEL_TOKEN, FAUCET_ADDR,
-                                     # FAUCET_PRIVATE_KEY, ADMIN_HTPASSWD, etc.
-  just -f etc/docker/Justfile vibe
+  1. (root) Bootstrap origin identity from the vibenet-proxy repo:
+       sudo HOST_IP=<public ip> bash vibenet-proxy/host/install/bootstrap-origin.sh
+     This writes the self-signed TLS cert + shared secret to /etc/vibenet/origin/.
 
-Only SSH (22) is open inbound. The tunnel to Cloudflare is outbound-only.
+  2. (root) Install the deploy controller:
+       sudo bash vibenet-proxy/host/install/install-deploy-controller.sh
+
+  3. (${VIBENET_USER}) Fill in vibenet-env and launch the stack:
+       su - ${VIBENET_USER}
+       cd ${VIBENET_CHECKOUT_DIR}
+       \$EDITOR etc/vibenet/vibenet-env   # VIBENET_ORIGIN_BIND_ADDR, FAUCET_ADDR,
+                                          # FAUCET_PRIVATE_KEY, ADMIN_HTPASSWD, etc.
+       just -f etc/docker/Justfile vibe
+
+Inbound ports: SSH (22), plus 8443 (nginx TLS origin) and 8445 (deploy
+controller) restricted to VIBENET_CORP_CIDR if it was set.
 =============================================================================
 EOF
