@@ -25,9 +25,20 @@ function isLocalHost(host) {
   return host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0";
 }
 
-// RPC / WS / explorer URL builders. They branch on hostname because local
-// dev publishes the gateway on three sibling ports (ui:18080, rpc:18081,
-// explorer:18082) whereas prod / dev route by hostname alone.
+// Public hostname scheme (Cloudflare-fronted):
+//   vibes.base.org            -> this UI
+//   rpc.vibes.base.org        -> JSON-RPC + WS
+//   explorer.vibes.base.org   -> vibescan
+//   faucet.vibes.base.org     -> vibenet-faucet
+//
+// Local dev publishes the gateway on four sibling loopback ports
+// (ui:18080, rpc:18081, explorer:18082, faucet:18083).
+const PUBLIC_SERVICE_HOSTS = {
+  rpc: "rpc.vibes.base.org",
+  explorer: "explorer.vibes.base.org",
+  faucet: "faucet.vibes.base.org",
+};
+
 function buildRpcUrl() {
   const host = location.hostname;
   if (isLocalHost(host)) {
@@ -35,10 +46,7 @@ function buildRpcUrl() {
     const rpcPort = uiPort + 1;
     return `${location.protocol}//${host}:${rpcPort}`;
   }
-  const rpcHost = host.startsWith("vibenet.")
-    ? host.replace(/^vibenet\./, "vibenet-rpc.")
-    : "vibenet-rpc.base.org";
-  return `https://${rpcHost}`;
+  return `https://${PUBLIC_SERVICE_HOSTS.rpc}`;
 }
 
 function buildWsUrl() {
@@ -49,10 +57,7 @@ function buildWsUrl() {
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
     return `${scheme}//${host}:${rpcPort}/ws`;
   }
-  const wsHost = host.startsWith("vibenet.")
-    ? host.replace(/^vibenet\./, "vibenet-rpc.")
-    : "vibenet-rpc.base.org";
-  return `wss://${wsHost}/ws`;
+  return `wss://${PUBLIC_SERVICE_HOSTS.rpc}/ws`;
 }
 
 function buildExplorerUrl() {
@@ -62,10 +67,17 @@ function buildExplorerUrl() {
     const explorerPort = uiPort + 2;
     return `${location.protocol}//${host}:${explorerPort}`;
   }
-  if (host.startsWith("vibenet.")) {
-    return `https://${host.replace(/^vibenet\./, "vibenet-explorer.")}`;
+  return `https://${PUBLIC_SERVICE_HOSTS.explorer}`;
+}
+
+function buildFaucetUrl() {
+  const host = location.hostname;
+  if (isLocalHost(host)) {
+    const uiPort = parseInt(location.port || "80", 10);
+    const faucetPort = uiPort + 3;
+    return `${location.protocol}//${host}:${faucetPort}`;
   }
-  return "https://vibenet-explorer.base.org";
+  return `https://${PUBLIC_SERVICE_HOSTS.faucet}`;
 }
 
 // Rewrite the prod hostnames in any rendered markdown so copy-pasteable
@@ -77,14 +89,17 @@ function localizeUrls(html) {
   const uiPort = parseInt(location.port || "80", 10);
   const rpcPort = uiPort + 1;
   const explorerPort = uiPort + 2;
+  const faucetPort = uiPort + 3;
   const httpBase = `${location.protocol}//${host}:${rpcPort}`;
   const wsScheme = location.protocol === "https:" ? "wss:" : "ws:";
   const wsBase = `${wsScheme}//${host}:${rpcPort}`;
   const explorerBase = `${location.protocol}//${host}:${explorerPort}`;
+  const faucetBase = `${location.protocol}//${host}:${faucetPort}`;
   return html
-    .replaceAll("https://vibenet-rpc.base.org", httpBase)
-    .replaceAll("wss://vibenet-rpc.base.org", wsBase)
-    .replaceAll("https://vibenet-explorer.base.org", explorerBase);
+    .replaceAll(`https://${PUBLIC_SERVICE_HOSTS.rpc}`, httpBase)
+    .replaceAll(`wss://${PUBLIC_SERVICE_HOSTS.rpc}`, wsBase)
+    .replaceAll(`https://${PUBLIC_SERVICE_HOSTS.explorer}`, explorerBase)
+    .replaceAll(`https://${PUBLIC_SERVICE_HOSTS.faucet}`, faucetBase);
 }
 
 async function main() {
@@ -101,6 +116,7 @@ async function main() {
   const rpcUrl = buildRpcUrl();
   const wsUrl = buildWsUrl();
   const explorerUrl = buildExplorerUrl();
+  const faucetUrl = buildFaucetUrl();
 
   document.getElementById("chain-id").textContent = String(VIBENET_CHAIN_ID);
   document.getElementById("rpc-display").textContent = rpcUrl;
@@ -112,6 +128,9 @@ async function main() {
 
   const explorerNav = document.getElementById("explorer-nav");
   if (explorerNav) explorerNav.href = explorerUrl;
+
+  const faucetNav = document.getElementById("faucet-nav");
+  if (faucetNav) faucetNav.href = faucetUrl;
 
   const instructionsEl = document.getElementById("instructions");
   const rendered = window.marked

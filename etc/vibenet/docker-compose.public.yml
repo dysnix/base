@@ -1,0 +1,40 @@
+# Public TLS overlay: exposes the nginx gateway's :443 listener with a
+# Cloudflare Origin CA certificate so Cloudflare can proxy public traffic
+# to the host under "Full (strict)" SSL/TLS mode.
+#
+# Layered on top of docker-compose.vibenet.yml on the production host.
+# Requires a one-time host bootstrap that writes:
+#   /etc/vibenet/tls/origin.crt   - Cloudflare Origin CA cert (PEM)
+#   /etc/vibenet/tls/origin.key   - matching private key (PEM, mode 0600)
+#
+# Generate the cert pair from the Cloudflare dashboard:
+#   SSL/TLS -> Origin Server -> Create Certificate
+#   Hostnames: vibes.base.org, *.vibes.base.org
+#   Validity: 15 years (default)
+# Paste the cert into origin.crt and the private key into origin.key on the
+# host, then chown root:root and chmod 0644/0600 respectively.
+#
+# Usage:
+#   docker compose \
+#     -f etc/docker/docker-compose.yml \
+#     -f etc/vibenet/docker-compose.vibenet.yml \
+#     -f etc/vibenet/docker-compose.public.yml \
+#     up -d
+#
+# `just vibe` auto-discovers this overlay when /etc/vibenet/tls/origin.crt
+# is present on the host, so normal operators don't need to pass it manually.
+
+services:
+  nginx-gateway:
+    # Publish the :443 listener to the Cloudflare-reachable IP. Defaults to
+    # 127.0.0.1 so running this overlay on a laptop stays loopback-only;
+    # prod sets VIBENET_PUBLIC_BIND_ADDR to the host's public IP in
+    # vibenet-env. ufw (see deploy/bootstrap.sh) restricts :443 on the
+    # public IP to Cloudflare's published IP ranges.
+    ports:
+      - "${VIBENET_PUBLIC_BIND_ADDR:-127.0.0.1}:443:443"
+    # TLS material lives at /etc/vibenet/tls/ on the host, outside the repo
+    # so it survives `git checkout` + `just vibe down -v`.
+    volumes:
+      - /etc/vibenet/tls:/etc/nginx/tls:ro
+      - ../vibenet/nginx/vibenet-public.conf.template:/etc/nginx/templates/vibenet-public.conf.template:ro

@@ -14,6 +14,13 @@
       <input type="text" name="q" placeholder="Search block / tx / address" autocomplete="off" />
       <button type="submit">→</button>
     </form>
+    {% match ctx.public_faucet_url %}
+      {% when Some with (url) %}
+        <nav class="site-nav">
+          <a href="{{ url }}" target="_blank" rel="noopener">Faucet ↗</a>
+        </nav>
+      {% when None %}
+    {% endmatch %}
   </header>
 
   <main class="content">

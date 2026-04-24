@@ -18,6 +18,7 @@ pub struct PageCtx {
     pub branch: String,
     pub commit: String,
     pub public_rpc_url: Option<String>,
+    pub public_faucet_url: Option<String>,
 }
 
 /// A block for listing rows.

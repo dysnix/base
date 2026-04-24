@@ -27,9 +27,13 @@ pub struct ExplorerConfig {
     /// Number of blocks to fetch in parallel during backfill.
     pub backfill_concurrency: usize,
     /// Base URL the UI surfaces as the RPC endpoint (e.g.
-    /// `https://vibenet-rpc.base.org`). Optional; only used for
+    /// `https://rpc.vibes.base.org`). Optional; only used for
     /// the "connect your wallet" hints on the home page.
     pub public_rpc_url: Option<String>,
+    /// Base URL for the public faucet (e.g. `https://faucet.vibes.base.org`).
+    /// Surfaced as an external nav link in the explorer templates. Optional;
+    /// if unset the nav entry is hidden.
+    pub public_faucet_url: Option<String>,
     /// Git branch / commit strings for the footer.
     pub branch: String,
     pub commit: String,
@@ -48,6 +52,9 @@ impl ExplorerConfig {
             start_block: optional_parsed("VIBESCAN_START_BLOCK")?.unwrap_or(0),
             backfill_concurrency: optional_parsed("VIBESCAN_BACKFILL_CONCURRENCY")?.unwrap_or(16),
             public_rpc_url: std::env::var("VIBESCAN_PUBLIC_RPC_URL").ok().filter(|s| !s.is_empty()),
+            public_faucet_url: std::env::var("VIBESCAN_PUBLIC_FAUCET_URL")
+                .ok()
+                .filter(|s| !s.is_empty()),
             branch: std::env::var("VIBENET_BRANCH").unwrap_or_else(|_| "unknown".to_string()),
             commit: std::env::var("VIBENET_COMMIT").unwrap_or_else(|_| "unknown".to_string()),
         })

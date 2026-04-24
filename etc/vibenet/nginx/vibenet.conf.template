@@ -1,31 +1,36 @@
 # nginx gateway for vibenet.
 #
-# In production, a corporate proxy on approved hardware terminates public
-# traffic and forwards to nginx's `:8443` origin listener (declared in the
-# sibling `vibenet-origin.conf.template`). This file declares the plaintext
-# internal listeners used on that docker network and for local dev:
-#   - vibenet.base.org           -> UI + faucet + admin + config + contracts
-#   - vibenet-rpc.base.org       -> / -> proxyd -> base-client
-#   - vibenet-explorer.base.org  -> vibescan (in-house explorer)
+# In production, Cloudflare fronts the host on the public hostnames listed
+# below and connects to this gateway's :443 TLS listener (declared in the
+# sibling `vibenet-public.conf.template`, enabled by the `public` overlay).
+# This file declares the plaintext internal listeners used on the docker
+# network and for local dev:
+#   - vibes.base.org             -> UI + admin + config + contracts
+#   - rpc.vibes.base.org         -> / -> proxyd -> base-client
+#   - explorer.vibes.base.org    -> vibescan (in-house explorer)
+#   - faucet.vibes.base.org      -> vibenet-faucet at /
 #
 # The RPC is intentionally open (no URL-path API key). Abuse is mitigated by
-# nginx per-IP rate limits, and by proxyd's per-method limits.
+# nginx per-IP rate limits here, Cloudflare per-IP rate limits at the edge,
+# and proxyd's per-method limits.
 #
 # For local dev each server block also listens on a dedicated port so you can
 # hit them without /etc/hosts tricks:
-#   - http://localhost:18080/      -> UI + faucet + admin
+#   - http://localhost:18080/      -> UI + admin
 #   - http://localhost:18081/      -> RPC
 #   - ws://localhost:18081/ws      -> RPC WS
 #   - http://localhost:18082/      -> vibescan explorer
+#   - http://localhost:18083/      -> faucet
 #
-# Rate limiting uses the real client IP from the `X-Forwarded-For` header the
-# corp proxy attaches. The loopback 1808x host ports are only reachable from
-# localhost so they can't be spoofed from outside.
+# Rate limiting uses the real client IP from the `X-Forwarded-For` header
+# that Cloudflare attaches. The loopback 1808x host ports are only reachable
+# from localhost so they can't be spoofed from outside.
 
-# Trust X-Forwarded-For from any upstream. In prod the only network path that
-# reaches this container is via the corp proxy's TLS -> 8443 listener; the
-# 1808x host bindings are loopback-only. Tighten to CORP_EGRESS_CIDR if this
-# container is ever exposed to a broader network.
+# Trust X-Forwarded-For from any upstream. In prod the only network path
+# that reaches this container is via Cloudflare's proxy terminating on the
+# :443 listener; the 1808x host bindings are loopback-only. Tighten to
+# Cloudflare's published IP ranges if this container is ever exposed
+# without Cloudflare in front.
 set_real_ip_from 0.0.0.0/0;
 real_ip_header X-Forwarded-For;
 real_ip_recursive on;
@@ -51,12 +56,12 @@ map $http_upgrade $connection_upgrade {
 }
 
 # =============================================================================
-# vibenet.base.org - UI, faucet, admin
+# vibes.base.org - UI, admin, config, contracts
 # =============================================================================
 server {
     listen 8080 default_server;
-    # vibenet.base.org in prod; localhost for local dev (VIBENET_HOST_PORT).
-    server_name vibenet.base.org localhost 127.0.0.1;
+    # vibes.base.org in prod; localhost for local dev (VIBENET_HOST_PORT).
+    server_name vibes.base.org localhost 127.0.0.1;
 
     # Static config read by the UI at runtime. Rendered from vibenet.yaml
     # into /srv/config/config.json at container start.
@@ -72,27 +77,6 @@ server {
         alias /srv/shared/contracts.json;
         add_header Cache-Control "no-store";
         default_type application/json;
-    }
-
-    # Faucet /status is cheap (just reads balance/cooldown state), share the
-    # UI IP-bucket so dashboards can poll without hitting the drip limiter.
-    location = /faucet/status {
-        limit_req zone=ui_ip burst=30 nodelay;
-        proxy_pass http://vibenet-faucet:8080/status;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-
-    # Faucet drip. nginx only catches obvious floods; the faucet service
-    # enforces the authoritative per-IP + per-address cooldowns and returns
-    # a descriptive JSON error body when either is tripped.
-    location /faucet/ {
-        limit_req zone=faucet_ip burst=10 nodelay;
-        proxy_pass http://vibenet-faucet:8080/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 
     # Admin = Grafana, gated by basic-auth.
@@ -115,22 +99,22 @@ server {
 }
 
 # =============================================================================
-# vibenet-rpc.base.org - RPC (open, rate-limited by IP)
+# rpc.vibes.base.org - RPC (open, rate-limited by IP)
 # =============================================================================
 server {
-    # Host-routed: `Host: vibenet-rpc.base.org` on 8080 from inside the
-    # docker network (corp proxy reaches nginx via the 8443 origin listener).
+    # Host-routed: `Host: rpc.vibes.base.org` on 8080 from inside the
+    # docker network (Cloudflare reaches nginx via the :443 public listener).
     listen 8080;
     # Local-dev path: any Host on 8081 (only server on that port, so it's
     # the implicit default). This lets `curl http://localhost:18081/` work
     # without a Host header override.
     listen 8081;
-    server_name vibenet-rpc.base.org;
+    server_name rpc.vibes.base.org;
 
     # HTTP JSON-RPC. The RPC hostname is single-purpose, so POST `/` is the
-    # endpoint (`cast -r https://vibenet-rpc.base.org`). There is no URL
-    # path API key - abuse is mitigated by nginx per-IP rate limits and
-    # proxyd's per-method limits.
+    # endpoint (`cast -r https://rpc.vibes.base.org`). There is no URL
+    # path API key - abuse is mitigated by nginx per-IP rate limits,
+    # Cloudflare rate limits, and proxyd's per-method limits.
     location = / {
         limit_req zone=rpc_ip burst=30 nodelay;
         proxy_pass http://proxyd:8080/;
@@ -159,18 +143,18 @@ server {
 }
 
 # =============================================================================
-# vibenet-explorer.base.org - vibescan (in-house block explorer)
+# explorer.vibes.base.org - vibescan (in-house block explorer)
 # =============================================================================
 # vibescan renders server-side HTML and does NOT make RPC calls from the
 # browser, so we don't need to expose any RPC routes here. The container
 # itself talks to base-client over the docker network.
 server {
-    # Host-routed: `Host: vibenet-explorer.base.org` on 8080 from inside the
-    # docker network (corp proxy reaches nginx via the 8443 origin listener).
+    # Host-routed: `Host: explorer.vibes.base.org` on 8080 from inside the
+    # docker network (Cloudflare reaches nginx via the :443 public listener).
     listen 8080;
     # Local-dev path: any Host on 8082 (only server on that port).
     listen 8082;
-    server_name vibenet-explorer.base.org;
+    server_name explorer.vibes.base.org;
 
     location / {
         limit_req zone=ui_ip burst=30 nodelay;
@@ -178,5 +162,63 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+
+# =============================================================================
+# faucet.vibes.base.org - vibenet-faucet UI + API
+# =============================================================================
+# Dedicated hostname for the faucet so its routes, rate limits, and
+# Cloudflare rules can be reasoned about independently. The UI links here
+# externally rather than serving faucet routes under the UI hostname.
+#
+# This block serves the faucet's static single-page UI (faucet.html +
+# faucet.js from /srv/ui, shared with the main UI volume) and proxies the
+# three API endpoints the faucet service exposes.
+server {
+    # Host-routed: `Host: faucet.vibes.base.org` on 8080 from inside the
+    # docker network (Cloudflare reaches nginx via the :443 public listener).
+    listen 8080;
+    # Local-dev path: any Host on 8083 (only server on that port).
+    listen 8083;
+    server_name faucet.vibes.base.org;
+
+    # Status is cheap (just reads balance/cooldown state), share the UI
+    # bucket so dashboards can poll without hitting the drip limiter.
+    location = /status {
+        limit_req zone=ui_ip burst=30 nodelay;
+        proxy_pass http://vibenet-faucet:8080/status;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Drip endpoints. nginx only catches obvious floods; the faucet
+    # service enforces the authoritative per-IP + per-address cooldowns
+    # and returns a descriptive JSON error body when either is tripped.
+    location = /drip {
+        limit_req zone=faucet_ip burst=10 nodelay;
+        proxy_pass http://vibenet-faucet:8080/drip;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    location = /drip-usdv {
+        limit_req zone=faucet_ip burst=10 nodelay;
+        proxy_pass http://vibenet-faucet:8080/drip-usdv;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Static single-page UI. faucet.html is the landing page; everything
+    # else (JS / CSS / favicon) loads from the same shared /srv/ui volume.
+    # Unknown paths fall back to faucet.html so the SPA can handle them
+    # client-side if we ever add routes.
+    location / {
+        limit_req zone=ui_ip burst=30 nodelay;
+        root /srv/ui;
+        index faucet.html;
+        try_files $uri $uri/ /faucet.html;
     }
 }

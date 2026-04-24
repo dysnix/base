@@ -3,17 +3,26 @@
 # Copy this file to `etc/vibenet/vibenet-env` on the host and fill in the real
 # values. Never commit the populated file.
 
-# === Origin listener (production only) ===
-# On the production bare-metal host, a corporate proxy terminates public
-# traffic and forwards to nginx's :8443 TLS origin listener. That listener is
-# added by `docker-compose.origin.yml`, which `just vibe` auto-includes when
-# /etc/vibenet/origin/origin.env (written by vibenet-proxy's bootstrap-origin.sh)
-# is present.
+# === Public TLS listener (production only) ===
+# On the production host, Cloudflare proxies public traffic (orange-cloud)
+# to nginx's :443 TLS listener. That listener is added by
+# `docker-compose.public.yml`, which `just vibe` auto-includes when
+# /etc/vibenet/tls/origin.crt (a Cloudflare Origin CA certificate) is
+# present on the host.
 #
-# VIBENET_ORIGIN_BIND_ADDR is the host IP the origin port is published on.
-# Leave unset on laptops; set to the corp-proxy-reachable public IP on prod.
-# VIBENET_ORIGIN_BIND_ADDR=64.130.37.133
-# VIBENET_ORIGIN_PORT=8443
+# Generate the cert pair from the Cloudflare dashboard:
+#   SSL/TLS -> Origin Server -> Create Certificate
+# Covering hostnames: vibes.base.org, *.vibes.base.org
+# Then on the host:
+#   sudo install -d -m 0755 /etc/vibenet/tls
+#   sudo tee /etc/vibenet/tls/origin.crt > /dev/null  # paste cert
+#   sudo tee /etc/vibenet/tls/origin.key > /dev/null  # paste key
+#   sudo chmod 0644 /etc/vibenet/tls/origin.crt
+#   sudo chmod 0600 /etc/vibenet/tls/origin.key
+#
+# VIBENET_PUBLIC_BIND_ADDR is the host IP :443 is published on. Leave unset
+# on laptops; set to the Cloudflare-reachable public IP on prod.
+# VIBENET_PUBLIC_BIND_ADDR=64.130.37.133
 
 # === Faucet ===
 # Address that funds every public drip. Prefunded with 10M ETH in the L1
@@ -51,11 +60,12 @@ VIBENET_CONTRACTS_YAML=etc/vibenet/setup/contracts.yaml
 
 # === Optional: local-dev host ports ===
 # Loopback-only bindings on `just vibe`. These are never reachable from the
-# public internet; the corp proxy talks to nginx via the 8443 origin listener
-# configured by docker-compose.origin.yml.
-# VIBENET_HOST_PORT=18080           # UI + faucet + admin
-# VIBENET_RPC_HOST_PORT=18081       # RPC + WS
-# VIBENET_EXPLORER_HOST_PORT=18082  # vibescan block explorer
+# public internet; Cloudflare talks to nginx via the :443 public listener
+# configured by docker-compose.public.yml.
+# VIBENET_HOST_PORT=18080             # UI + admin
+# VIBENET_RPC_HOST_PORT=18081         # RPC + WS
+# VIBENET_EXPLORER_HOST_PORT=18082    # vibescan block explorer
+# VIBENET_FAUCET_HOST_PORT=18083      # vibenet-faucet UI + API
 
 # === Optional: vibescan tuning ===
 # Start indexing from this block instead of 0. Handy if you restarted with a
@@ -67,8 +77,8 @@ VIBENET_CONTRACTS_YAML=etc/vibenet/setup/contracts.yaml
 # VIBESCAN_BACKFILL_CONCURRENCY=16
 # Public RPC URL surfaced in the explorer footer so devs can copy it. Leave
 # empty to omit the footer row entirely.
-# VIBESCAN_PUBLIC_RPC_URL=https://vibenet-rpc.base.org
+# VIBESCAN_PUBLIC_RPC_URL=https://rpc.vibes.base.org
+# Public faucet URL surfaced as an external nav link in the explorer header.
+# Leave empty to hide the link.
+# VIBESCAN_PUBLIC_FAUCET_URL=https://faucet.vibes.base.org
 
-# === Optional: current vibenet env is still in use on the production host ===
-# The legacy `TUNNEL_TOKEN` variable has been removed; vibenet no longer runs
-# a cloudflared tunnel. If an older vibenet-env still has it, it's ignored.

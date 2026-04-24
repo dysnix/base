@@ -1,6 +1,6 @@
 # Vibenet UI content + per-branch config.
 # This file is mounted into the nginx container and exposed at:
-#   https://vibenet.base.org/config.json
+#   https://vibes.base.org/config.json
 #
 # Edit this file and re-run `just vibe` (or just restart nginx-gateway) to
 # update what devs see. No rebuild of the UI is required.
@@ -18,17 +18,17 @@ instructions_markdown: |
   ## Connect your wallet
 
   - **Chain ID:** `84538453`
-  - **RPC URL:** `https://vibenet-rpc.base.org`
-  - **WS URL:** `wss://vibenet-rpc.base.org/ws`
-  - **Explorer:** [vibescan](https://vibenet-explorer.base.org/)
+  - **RPC URL:** `https://rpc.vibes.base.org`
+  - **WS URL:** `wss://rpc.vibes.base.org/ws`
+  - **Explorer:** [vibescan](https://explorer.vibes.base.org/)
 
   The RPC is currently open - IP-based rate limits apply.
 
   ## Get test funds
 
-  Use the [faucet](/faucet) to drip testnet ETH or mint `USDV` (Vibe USD, our
-  public-mint ERC-20) to any address. Rate limits apply per IP and per
-  destination address.
+  Use the [faucet](https://faucet.vibes.base.org/) to drip testnet ETH or
+  mint `USDV` (Vibe USD, our public-mint ERC-20) to any address. Rate
+  limits apply per IP and per destination address.
 
   ## Pre-deployed contracts
 
@@ -44,7 +44,7 @@ instructions_markdown: |
 
   ## Block explorer
 
-  [vibescan](https://vibenet-explorer.base.org/) is the in-house block
+  [vibescan](https://explorer.vibes.base.org/) is the in-house block
   explorer - browse blocks, transactions, and per-address activity feeds.
   Server-rendered, no JS required.
 
@@ -53,7 +53,10 @@ instructions_markdown: |
 features:
   - title: "vibescan explorer"
     description: "In-house block explorer with per-address activity feeds, indexed straight off the node."
-    link: "https://vibenet-explorer.base.org/"
+    link: "https://explorer.vibes.base.org/"
+  - title: "Faucet"
+    description: "Public testnet faucet. Drips ETH and mints USDV with per-IP + per-address cooldowns."
+    link: "https://faucet.vibes.base.org/"
   - title: "USDV (Vibe USD)"
     description: "Public-mint ERC-20 for testing token flows. The faucet can mint it to any address."
 

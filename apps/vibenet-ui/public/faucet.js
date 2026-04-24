@@ -1,10 +1,12 @@
 // base vibenet faucet page.
 //
-// Calls the faucet service behind nginx at /faucet/status, /faucet/drip,
-// and /faucet/drip-usdv. The drip form has two submit buttons ("Drip ETH"
-// / "Mint USDV"); the clicked button's `value` picks which asset to drip.
-// USDV drips go to a separate endpoint that reads the token address from
-// the shared contracts.json and calls mint() on it.
+// Served from faucet.vibes.base.org in prod (its own Cloudflare-fronted
+// hostname) and from http://localhost:18083 for local dev. Calls the
+// faucet service at same-origin /status, /drip, and /drip-usdv. The drip
+// form has two submit buttons ("Drip ETH" / "Mint USDV"); the clicked
+// button's `value` picks which asset to drip. USDV drips go to a separate
+// endpoint that reads the token address from the shared contracts.json
+// and calls mint() on it.
 
 // Mirror the explorer-URL logic from app.js so the USDV address in the
 // status line can link directly to its explorer page. Kept inline (rather
@@ -17,14 +19,24 @@ function isLocalHost(host) {
 function buildExplorerUrl() {
   const host = location.hostname;
   if (isLocalHost(host)) {
-    const uiPort = parseInt(location.port || "80", 10);
-    const explorerPort = uiPort + 2;
+    // Local dev publishes the faucet on the UI base port + 3 and the
+    // explorer on +2. `location.port` is +3 here, so the explorer is -1.
+    const faucetPort = parseInt(location.port || "80", 10);
+    const explorerPort = faucetPort - 1;
     return `${location.protocol}//${host}:${explorerPort}`;
   }
-  if (host.startsWith("vibenet.")) {
-    return `https://${host.replace(/^vibenet\./, "vibenet-explorer.")}`;
+  return "https://explorer.vibes.base.org";
+}
+
+function buildUiUrl() {
+  const host = location.hostname;
+  if (isLocalHost(host)) {
+    // UI is at faucetPort - 3.
+    const faucetPort = parseInt(location.port || "80", 10);
+    const uiPort = faucetPort - 3;
+    return `${location.protocol}//${host}:${uiPort}`;
   }
-  return "https://vibenet-explorer.base.org";
+  return "https://vibes.base.org";
 }
 
 function formatEth(wei) {
@@ -41,7 +53,7 @@ function formatUsdv(units) {
 async function loadStatus() {
   const el = document.getElementById("faucet-status");
   try {
-    const res = await fetch("/faucet/status", { cache: "no-store" });
+    const res = await fetch("/status", { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const s = await res.json();
     const explorer = buildExplorerUrl();
@@ -92,7 +104,7 @@ form.addEventListener("submit", async (ev) => {
   buttons.forEach((b) => (b.disabled = true));
   resultEl.textContent = token === "usdv" ? "Minting USDV..." : "Dripping ETH...";
   try {
-    const endpoint = token === "usdv" ? "/faucet/drip-usdv" : "/faucet/drip";
+    const endpoint = token === "usdv" ? "/drip-usdv" : "/drip";
     const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -120,5 +132,11 @@ form.addEventListener("submit", async (ev) => {
 
 const explorerNav = document.getElementById("explorer-nav");
 if (explorerNav) explorerNav.href = buildExplorerUrl();
+
+const uiHref = buildUiUrl();
+const homeNav = document.getElementById("home-nav");
+if (homeNav) homeNav.href = uiHref;
+const brandLink = document.getElementById("brand-link");
+if (brandLink) brandLink.href = uiHref;
 
 loadStatus();

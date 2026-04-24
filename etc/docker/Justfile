@@ -78,15 +78,15 @@ transfer-leader to='':
 conductor:
     cargo run --quiet -p basectl -- conductor
 
-# Vibenet: public devnet behind a corporate proxy. Single sequencer + nginx
+# Vibenet: public devnet fronted by Cloudflare. Single sequencer + nginx
 # gateway + faucet + contract deployer. Requires etc/vibenet/vibenet-env
 # (copy from vibenet-env.example and fill in secrets before running).
 #
-# On production hosts that have run the one-time origin bootstrap from the
-# vibenet-proxy repo (which writes /etc/vibenet/origin/origin.env), the
-# `docker-compose.origin.yml` overlay is auto-included to expose the 8443
-# TLS origin listener that the corp proxy pins. Laptops without that file
-# get the local-dev stack only.
+# On production hosts that have had a Cloudflare Origin CA certificate
+# installed at /etc/vibenet/tls/origin.{crt,key}, the `public` overlay is
+# auto-included to expose the :443 TLS listener that Cloudflare connects
+# to. Laptops without that cert get the local-dev stack only (loopback
+# ports 18080/18081/18082/18083).
 vibe: vibe-down _build-setup-image (_build-rust-images "devnet" "dev")
     #!/usr/bin/env bash
     set -euo pipefail
@@ -96,17 +96,17 @@ vibe: vibe-down _build-setup-image (_build-rust-images "devnet" "dev")
     fi
     export VIBENET_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
     export VIBENET_COMMIT="$(git rev-parse --short HEAD)"
-    origin_overlay=()
-    if [ -f /etc/vibenet/origin/origin.env ]; then
-      origin_overlay=(-f etc/vibenet/docker-compose.origin.yml)
-      echo "[vibe] origin overlay enabled (/etc/vibenet/origin/origin.env found)"
+    public_overlay=()
+    if [ -f /etc/vibenet/tls/origin.crt ]; then
+      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
+      echo "[vibe] public overlay enabled (/etc/vibenet/tls/origin.crt found)"
     fi
     docker compose \
       --env-file etc/docker/devnet-env \
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${origin_overlay[@]}" \
+      "${public_overlay[@]}" \
       up -d --build --scale contender=0
 
 # Stops vibenet and deletes all data. `-v` wipes the named volumes so state
@@ -117,16 +117,16 @@ vibe: vibe-down _build-setup-image (_build-rust-images "devnet" "dev")
 vibe-down:
     #!/usr/bin/env bash
     set -euo pipefail
-    origin_overlay=()
-    if [ -f /etc/vibenet/origin/origin.env ]; then
-      origin_overlay=(-f etc/vibenet/docker-compose.origin.yml)
+    public_overlay=()
+    if [ -f /etc/vibenet/tls/origin.crt ]; then
+      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
     fi
     docker compose \
       --env-file etc/docker/devnet-env \
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${origin_overlay[@]}" \
+      "${public_overlay[@]}" \
       down --remove-orphans -v || true
     docker run --rm -v "$(pwd)/.devnet:/devnet" alpine sh -c 'rm -rf /devnet/*' || true
 
@@ -134,32 +134,32 @@ vibe-down:
 vibe-logs *containers:
     #!/usr/bin/env bash
     set -euo pipefail
-    origin_overlay=()
-    if [ -f /etc/vibenet/origin/origin.env ]; then
-      origin_overlay=(-f etc/vibenet/docker-compose.origin.yml)
+    public_overlay=()
+    if [ -f /etc/vibenet/tls/origin.crt ]; then
+      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
     fi
     docker compose \
       --env-file etc/docker/devnet-env \
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${origin_overlay[@]}" \
+      "${public_overlay[@]}" \
       logs -f {{ containers }}
 
 # Shows vibenet container status
 vibe-ps *services:
     #!/usr/bin/env bash
     set -euo pipefail
-    origin_overlay=()
-    if [ -f /etc/vibenet/origin/origin.env ]; then
-      origin_overlay=(-f etc/vibenet/docker-compose.origin.yml)
+    public_overlay=()
+    if [ -f /etc/vibenet/tls/origin.crt ]; then
+      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
     fi
     docker compose \
       --env-file etc/docker/devnet-env \
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${origin_overlay[@]}" \
+      "${public_overlay[@]}" \
       ps {{ services }}
 
 # Stops devnet+ingress, deletes data, and starts fresh with full ingress stack

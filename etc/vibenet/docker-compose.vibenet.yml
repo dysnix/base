@@ -12,15 +12,14 @@
 #   - vibenet-setup: one-shot. Sweeps anvil balances -> faucet on L2, then
 #     deploys demo contracts and writes /shared/contracts.json.
 #   - proxyd: per-method rate limits as a second line of defense.
-#   - vibescan: in-house block explorer. Indexes address -> tx mappings in
-#     sqlite and reads full bodies from base-client on demand. Listens on
-#     :8080 internally; nginx terminates the `vibenet-explorer.base.org`
-#     server block to it.
+  #   - vibescan: in-house block explorer. Indexes address -> tx mappings in
+  #     sqlite and reads full bodies from base-client on demand. Listens on
+  #     :8080 internally; nginx terminates the `explorer.vibes.base.org`
+  #     server block to it.
 #
-# In production, public traffic arrives at a corporate proxy on approved
-# hardware which forwards to this container's `:8443` origin listener (enabled
-# via the `docker-compose.origin.yml` overlay). See
-# `etc/vibenet/deploy/DESIGN.md` for the end-to-end architecture.
+# In production, Cloudflare proxies public traffic to this container's `:443`
+# TLS listener (enabled via the `docker-compose.public.yml` overlay). See
+# `etc/vibenet/deploy/README.md` for the end-to-end architecture.
 
 services:
   # --- Prefund the faucet on L1 via the existing setup-l1 anvil genesis ----
@@ -63,16 +62,18 @@ services:
   nginx-gateway:
     image: nginx:1.27-alpine
     container_name: vibenet-nginx
-    # Loopback-only host ports for local dev. In production the public `:8443`
-    # origin listener is added by `docker-compose.origin.yml` and published to
-    # the corp-proxy-reachable IP; these 1808x bindings stay loopback-only.
-    #   ${VIBENET_HOST_PORT}          -> UI / faucet / admin     (:8080)
+    # Loopback-only host ports for local dev. In production the public `:443`
+    # TLS listener is added by `docker-compose.public.yml` and published to
+    # the Cloudflare-reachable IP; these 1808x bindings stay loopback-only.
+    #   ${VIBENET_HOST_PORT}          -> UI / admin              (:8080)
     #   ${VIBENET_RPC_HOST_PORT}      -> RPC / WS                 (:8081)
     #   ${VIBENET_EXPLORER_HOST_PORT} -> vibescan explorer         (:8082)
+    #   ${VIBENET_FAUCET_HOST_PORT}   -> faucet                    (:8083)
     ports:
       - "127.0.0.1:${VIBENET_HOST_PORT:-18080}:8080"
       - "127.0.0.1:${VIBENET_RPC_HOST_PORT:-18081}:8081"
       - "127.0.0.1:${VIBENET_EXPLORER_HOST_PORT:-18082}:8082"
+      - "127.0.0.1:${VIBENET_FAUCET_HOST_PORT:-18083}:8083"
     depends_on:
       vibenet-faucet:
         condition: service_started
@@ -230,6 +231,7 @@ services:
       - VIBESCAN_START_BLOCK=${VIBESCAN_START_BLOCK:-0}
       - VIBESCAN_BACKFILL_CONCURRENCY=${VIBESCAN_BACKFILL_CONCURRENCY:-16}
       - VIBESCAN_PUBLIC_RPC_URL=${VIBESCAN_PUBLIC_RPC_URL:-}
+      - VIBESCAN_PUBLIC_FAUCET_URL=${VIBESCAN_PUBLIC_FAUCET_URL:-}
       - VIBENET_BRANCH=${VIBENET_BRANCH:-unknown}
       - VIBENET_COMMIT=${VIBENET_COMMIT:-unknown}
       - VIBESCAN_LOG=info,sqlx=warn,hyper=warn

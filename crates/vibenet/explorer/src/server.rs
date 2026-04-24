@@ -60,6 +60,7 @@ impl Explorer {
             branch: config.branch.clone(),
             commit: config.commit.clone(),
             public_rpc_url: config.public_rpc_url.clone(),
+            public_faucet_url: config.public_faucet_url.clone(),
         };
         Self { state: Arc::new(AppState { storage, rpc, ctx }) }
     }
