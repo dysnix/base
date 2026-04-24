@@ -1,14 +1,16 @@
 //! Bootnode command with discv5 NAT fix.
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
+use base_execution_chainspec::BaseChainSpec;
 use clap::Parser;
+use reth_chainspec::Hardforks;
 use reth_cli_util::{get_secret_key, load_secret_key::rng_secret_key};
 use reth_discv4::{DiscoveryUpdate, Discv4, Discv4Config};
 use reth_discv5::{Config, Discv5, NetworkStackId, discv5::Event};
 use reth_net_nat::{NatResolver, external_addr_with};
-use reth_network_peers::NodeRecord;
-use secp256k1::SecretKey;
+use reth_network_peers::{NodeRecord, pk2id};
+use secp256k1::{PublicKey, SecretKey};
 use tokio::select;
 use tokio_stream::StreamExt;
 use tracing::{info, warn};
@@ -37,6 +39,10 @@ pub struct Command {
     /// Run a discv5 topic discovery bootnode in addition to discv4.
     #[arg(long)]
     pub v5: bool,
+
+    /// Chain spec to use for the bootnode. Sets the fork ID in the discv5 ENR.
+    #[arg(long, value_parser = crate::chainspec::chain_value_parser)]
+    pub chain: Option<Arc<BaseChainSpec>>,
 }
 
 impl Command {
@@ -44,8 +50,12 @@ impl Command {
     pub async fn execute(self) -> eyre::Result<()> {
         info!(v4_addr = %self.v4_addr, v5_addr = %self.v5_addr, nat = %self.nat, v5 = self.v5, "Bootnode starting");
 
-        // discv4
         let sk = self.network_secret()?;
+        let peer_id = pk2id(&PublicKey::from_secret_key(secp256k1::SECP256K1, &sk));
+        let ephemeral = self.p2p_secret_key.is_none();
+        info!(%peer_id, ephemeral, "loaded p2p key");
+
+        // discv4
         let v4_node_record = NodeRecord::from_secret_key(self.v4_addr, &sk);
         let nat = self.nat;
         let config = Discv4Config::builder().external_ip_resolver(Some(nat.clone())).build();
@@ -62,9 +72,16 @@ impl Command {
         if self.v5 {
             info!("Initializing discv5");
             // exclude eth protocol nodes, we're looking for opel nodes
-            let config = Config::builder(self.v5_addr)
-                .must_not_include_keys(&[NetworkStackId::ETH, NetworkStackId::ETH2])
-                .build();
+            let mut builder = Config::builder(self.v5_addr)
+                .must_not_include_keys(&[NetworkStackId::ETH, NetworkStackId::ETH2]);
+
+            if let Some(ref chain_spec) = self.chain {
+                if let Some(network_stack_id) = NetworkStackId::id(chain_spec.as_ref()) {
+                    builder = builder.fork(network_stack_id, chain_spec.latest_fork_id());
+                }
+            }
+
+            let config = builder.build();
             let (discv5, updates) = Discv5::start(&sk, config).await?;
 
             // The upstream reth bootnode skips NAT resolution for discv5, leaving the ENR with

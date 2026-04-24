@@ -109,8 +109,11 @@ impl Command {
     /// Header and Body delegate chain parsing internally to [`DownloadArgs`] whose `chain`
     /// field is private, so we return `None` for those. Only the log-directory path suffix
     /// uses this value, so the impact is cosmetic.
-    pub const fn chain_spec(&self) -> Option<&Arc<BaseChainSpec>> {
-        None
+    pub fn chain_spec(&self) -> Option<&Arc<BaseChainSpec>> {
+        match &self.command {
+            Subcommands::Bootnode(cmd) => cmd.chain.as_ref(),
+            _ => None,
+        }
     }
 }
 
