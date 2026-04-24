@@ -26,7 +26,7 @@ pub struct AuditConnectorConfig {
 
 impl AuditConnectorConfig {
     /// Creates a new config with the given audit URL and default tuning.
-    pub fn new(audit_url: Url) -> Self {
+    pub const fn new(audit_url: Url) -> Self {
         Self {
             audit_url,
             max_batch_size: 100,

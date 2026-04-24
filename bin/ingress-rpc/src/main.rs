@@ -1,8 +1,10 @@
 //! Ingress RPC binary entry point.
 
+use std::time::Duration;
+
 use alloy_provider::ProviderBuilder;
 use audit_archiver_lib::{
-    AuditConnector, BundleEvent, KafkaBundleEventPublisher, load_kafka_config_from_file,
+    AuditConnectorConfig, SpawnedAuditConnector, load_kafka_config_from_file,
 };
 use base_bundles::MeterBundleResponse;
 use base_cli_utils::LogConfig;
@@ -14,7 +16,7 @@ use ingress_rpc_lib::{
 };
 use jsonrpsee::server::Server;
 use rdkafka::{ClientConfig, producer::FutureProducer};
-use tokio::sync::{broadcast, mpsc};
+use tokio::{signal, sync::broadcast};
 use tracing::info;
 
 base_cli_utils::define_log_args!("TIPS_INGRESS");
@@ -82,15 +84,15 @@ async fn main() -> anyhow::Result<()> {
 
     let queue = KafkaMessageQueue::new(queue_producer);
 
-    let audit_client_config =
-        ClientConfig::from_iter(load_kafka_config_from_file(&config.audit_kafka_properties)?);
-
-    let audit_producer: FutureProducer = audit_client_config.create()?;
-
-    let audit_publisher =
-        KafkaBundleEventPublisher::new(audit_producer, config.audit_topic.clone());
-    let (audit_tx, audit_rx) = mpsc::channel::<BundleEvent>(config.audit_channel_capacity);
-    AuditConnector::connect(audit_rx, audit_publisher);
+    let audit_config = AuditConnectorConfig::new(config.audit_service_url.clone())
+        .with_max_batch_size(config.audit_batch_size)
+        .with_request_timeout(Duration::from_millis(config.audit_rpc_timeout_ms))
+        .with_max_retries(config.audit_max_retries)
+        .with_retry_backoff(Duration::from_millis(config.audit_retry_backoff_ms))
+        .with_shutdown_timeout(Duration::from_millis(config.audit_shutdown_timeout_ms));
+    let (audit_tx, audit_connector) =
+        SpawnedAuditConnector::spawn(audit_config, config.audit_channel_capacity)
+            .map_err(|e| anyhow::anyhow!("failed to spawn audit connector: {e}"))?;
 
     let (builder_tx, _) =
         broadcast::channel::<MeterBundleResponse>(config.max_buffered_meter_bundle_responses);
@@ -123,7 +125,20 @@ async fn main() -> anyhow::Result<()> {
         address = %addr
     );
 
-    handle.stopped().await;
+    let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+        .expect("failed to install SIGTERM handler");
+    tokio::select! {
+        _ = handle.clone().stopped() => {}
+        _ = signal::ctrl_c() => {
+            info!("received SIGINT, shutting down");
+        }
+        _ = sigterm.recv() => {
+            info!("received SIGTERM, shutting down");
+        }
+    }
+
+    let _ = handle.stop();
+    audit_connector.shutdown().await;
     health_handle.abort();
 
     Ok(())

@@ -93,13 +93,30 @@ pub struct Config {
     #[arg(long, env = "TIPS_INGRESS_KAFKA_INGRESS_TOPIC", default_value = "tips-ingress")]
     pub ingress_topic: String,
 
-    /// Kafka properties file for audit events
-    #[arg(long, env = "TIPS_INGRESS_KAFKA_AUDIT_PROPERTIES_FILE")]
-    pub audit_kafka_properties: String,
+    /// URL of the audit-archiver JSON-RPC service.
+    #[arg(long, env = "TIPS_INGRESS_AUDIT_SERVICE_URL")]
+    pub audit_service_url: Url,
 
-    /// Kafka topic for audit events
-    #[arg(long, env = "TIPS_INGRESS_KAFKA_AUDIT_TOPIC", default_value = "tips-audit")]
-    pub audit_topic: String,
+    /// Maximum events per `base_persistBundleEventBatch` request before forcing a flush.
+    #[arg(long, env = "TIPS_INGRESS_AUDIT_BATCH_SIZE", default_value = "100")]
+    pub audit_batch_size: usize,
+
+    /// Per-request timeout in milliseconds for audit RPC calls.
+    #[arg(long, env = "TIPS_INGRESS_AUDIT_RPC_TIMEOUT_MS", default_value = "1000")]
+    pub audit_rpc_timeout_ms: u64,
+
+    /// Maximum retries before dropping an audit batch.
+    #[arg(long, env = "TIPS_INGRESS_AUDIT_MAX_RETRIES", default_value = "3")]
+    pub audit_max_retries: u32,
+
+    /// Base retry backoff in milliseconds (doubles each attempt).
+    #[arg(long, env = "TIPS_INGRESS_AUDIT_RETRY_BACKOFF_MS", default_value = "100")]
+    pub audit_retry_backoff_ms: u64,
+
+    /// Maximum time in milliseconds to wait for the audit connector to drain its buffer on
+    /// shutdown.
+    #[arg(long, env = "TIPS_INGRESS_AUDIT_SHUTDOWN_TIMEOUT_MS", default_value = "30000")]
+    pub audit_shutdown_timeout_ms: u64,
 
     /// Default lifetime for sent transactions in seconds (default: 3 hours)
     #[arg(
