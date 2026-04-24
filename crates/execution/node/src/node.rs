@@ -2,7 +2,7 @@
 
 use std::{
     marker::PhantomData,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::Arc,
 };
 

@@ -5,7 +5,10 @@ use std::{net::SocketAddr, path::PathBuf};
 use clap::Parser;
 use reth_cli_util::{get_secret_key, load_secret_key::rng_secret_key};
 use reth_discv4::{DiscoveryUpdate, Discv4, Discv4Config};
-use reth_discv5::{Config, Discv5, NetworkStackId, discv5::Event};
+use reth_discv5::{
+    Config, DEFAULT_DISCOVERY_V5_LISTEN_CONFIG, Discv5, NetworkStackId,
+    discv5::{self, Event},
+};
 use reth_net_nat::{NatResolver, external_addr_with};
 use reth_network_peers::NodeRecord;
 use secp256k1::SecretKey;
@@ -62,7 +65,27 @@ impl Command {
         if self.v5 {
             info!("Initializing discv5");
             // exclude eth protocol nodes, we're looking for opel nodes
-            let config = Config::builder(self.v5_addr).build();
+            let config = Config::builder(self.v5_addr)
+                .discv5_config(
+                    discv5::ConfigBuilder::new(DEFAULT_DISCOVERY_V5_LISTEN_CONFIG)
+                        .table_filter(|enr| {
+                            if enr.get_raw_rlp(NetworkStackId::ETH).is_some() {
+                                warn!("ignoring peer with ETH network stack");
+                                return false;
+                            }
+                            if enr.get_raw_rlp(NetworkStackId::ETH2).is_some() {
+                                warn!("ignoring peer with ETH2 network stack");
+                                return false;
+                            }
+                            if enr.get_raw_rlp(NetworkStackId::OPSTACK).is_some() {
+                                warn!("ignoring peer with OPSTACK network stack");
+                                return false;
+                            }
+                            true
+                        })
+                        .build(),
+                )
+                .build();
             let (discv5, updates) = Discv5::start(&sk, config).await?;
 
             // The upstream reth bootnode skips NAT resolution for discv5, leaving the ENR with
