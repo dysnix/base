@@ -66,9 +66,8 @@ impl Command {
 
         if self.v5 {
             info!("Initializing discv5");
-            let config = Config::builder(self.v5_addr)
-                .lookup_interval(self.find_node_interval)
-                .build();
+            let config =
+                Config::builder(self.v5_addr).lookup_interval(self.find_node_interval).build();
             let (discv5, updates) = Discv5::start(&sk, config).await?;
 
             // The upstream reth bootnode skips NAT resolution for discv5, leaving the ENR with
