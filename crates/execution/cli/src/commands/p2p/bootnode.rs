@@ -1,20 +1,17 @@
 //! Bootnode command with discv5 NAT fix.
 
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{net::SocketAddr, path::PathBuf};
 
 use clap::Parser;
 use reth_cli_util::{get_secret_key, load_secret_key::rng_secret_key};
 use reth_discv4::{DiscoveryUpdate, Discv4, Discv4Config};
-use reth_discv5::{
-    Config, Discv5,
-    discv5::{Event, enr::NodeId},
-};
+use reth_discv5::{Config, Discv5, discv5::Event};
 use reth_net_nat::{NatResolver, external_addr_with};
 use reth_network_peers::NodeRecord;
 use secp256k1::SecretKey;
-use tokio::{select, time::interval as tokio_interval};
+use tokio::select;
 use tokio_stream::StreamExt;
-use tracing::{info, trace, warn};
+use tracing::{info, warn};
 
 /// Start a discovery-only bootnode.
 #[derive(Parser, Debug)]
@@ -41,8 +38,9 @@ pub struct Command {
     #[arg(long)]
     pub v5: bool,
 
-    /// Interval in seconds between discv5 FINDNODE crawl queries. Only active with --v5.
-    #[arg(long, default_value = "5")]
+    /// Steady-state interval in seconds between discv5 kbucket lookup queries. Only active with
+    /// --v5. During bootstrap a faster interval is used automatically.
+    #[arg(long, default_value = "20")]
     pub find_node_interval: u64,
 }
 
@@ -64,12 +62,13 @@ impl Command {
 
         // discv5
         let mut discv5_updates = None;
-        let mut discv5_handle = None;
-        let mut crawl_interval = None;
+        let mut _discv5 = None;
 
         if self.v5 {
             info!("Initializing discv5");
-            let config = Config::builder(self.v5_addr).build();
+            let config = Config::builder(self.v5_addr)
+                .lookup_interval(self.find_node_interval)
+                .build();
             let (discv5, updates) = Discv5::start(&sk, config).await?;
 
             // The upstream reth bootnode skips NAT resolution for discv5, leaving the ENR with
@@ -90,9 +89,8 @@ impl Command {
 
             info!(enr = %discv5.local_enr(), "Started discv5");
 
-            crawl_interval = Some(tokio_interval(Duration::from_secs(self.find_node_interval)));
             discv5_updates = Some(updates);
-            discv5_handle = Some(discv5);
+            _discv5 = Some(discv5);
         }
 
         loop {
@@ -128,25 +126,6 @@ impl Command {
                             info!("discv5 update stream ended");
                             break;
                         }
-                    }
-                }
-                _ = async {
-                    if let Some(interval) = &mut crawl_interval {
-                        interval.tick().await;
-                    } else {
-                        futures::future::pending::<()>().await
-                    }
-                } => {
-                    if let Some(ref disc) = discv5_handle {
-                        let id = NodeId::random();
-                        trace!(node_id = %id, "discv5 FINDNODE crawl");
-                        let fut = disc.with_discv5(|d| d.find_node(id));
-                        tokio::spawn(async move {
-                            match fut.await {
-                                Ok(nodes) => info!(count = nodes.len(), "discv5 FINDNODE returned nodes"),
-                                Err(err) => warn!(error = ?err, "discv5 FINDNODE failed"),
-                            }
-                        });
                     }
                 }
             }
