@@ -130,6 +130,57 @@ vibe-down:
       down --remove-orphans -v || true
     docker run --rm -v "$(pwd)/.devnet:/devnet" alpine sh -c 'rm -rf /devnet/*' || true
 
+# In-place rebuild of just the faucet, UI config, and nginx gateway. Leaves
+# the chain (L1/L2 + proxyd + vibescan) running with no state reset, so
+# balances, contracts, block history, and the explorer index all survive.
+# Use this when iterating on:
+#   - crates/vibenet/faucet/          (Rust: triggers an image rebuild)
+#   - apps/vibenet-ui/public/*        (HTML/JS/CSS: bind-mounted; a browser
+#                                      refresh is actually enough, this
+#                                      recipe just ensures nginx is fresh)
+#   - etc/vibenet/config/vibenet.yaml (rerun by vibenet-config-renderer)
+#   - etc/vibenet/nginx/*.template    (picked up when nginx restarts)
+#
+# For anything that touches the chain (base-client/builder/setup/proxyd)
+# or the vibescan index you still want a full `just vibe`, which wipes
+# state and starts fresh. For vibescan-only tweaks we can add a
+# `vibe-explorer` sibling if iteration pain becomes a thing.
+vibe-faucet:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f etc/vibenet/vibenet-env ]; then
+      echo "ERROR: etc/vibenet/vibenet-env missing. Copy from etc/vibenet/vibenet-env.example." >&2
+      exit 1
+    fi
+    export VIBENET_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+    export VIBENET_COMMIT="$(git rev-parse --short HEAD)"
+    public_overlay=()
+    if [ -f /etc/vibenet/tls/origin.crt ]; then
+      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
+    fi
+    # Rebuild the faucet image and recreate only its container. --no-deps
+    # keeps base-client and friends untouched (they're already healthy).
+    # --force-recreate swaps the old container out even if the image hash
+    # is the same, so config changes (env vars, volumes) take effect.
+    docker compose \
+      --env-file etc/docker/devnet-env \
+      --env-file etc/vibenet/vibenet-env \
+      -f etc/docker/docker-compose.yml \
+      -f etc/vibenet/docker-compose.vibenet.yml \
+      "${public_overlay[@]}" \
+      up -d --no-deps --build --force-recreate vibenet-faucet
+    # Re-run the yq config renderer (one-shot that writes a fresh
+    # /srv/config/config.json) and recreate nginx so it re-runs envsubst
+    # over the conf template. The static UI bind mount needs no action -
+    # nginx serves whatever is on disk now.
+    docker compose \
+      --env-file etc/docker/devnet-env \
+      --env-file etc/vibenet/vibenet-env \
+      -f etc/docker/docker-compose.yml \
+      -f etc/vibenet/docker-compose.vibenet.yml \
+      "${public_overlay[@]}" \
+      up -d --no-deps --force-recreate vibenet-config-renderer nginx-gateway
+
 # Stream logs from vibenet containers (optionally specify container names)
 vibe-logs *containers:
     #!/usr/bin/env bash
