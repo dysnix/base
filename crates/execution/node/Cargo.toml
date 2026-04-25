@@ -13,8 +13,6 @@ workspace = true
 [dependencies]
 # reth
 reth-db.workspace = true
-reth-discv5.workspace = true
-discv5.workspace = true
 reth-evm.workspace = true
 reth-tasks.workspace = true
 reth-db-api.workspace = true
@@ -65,6 +63,10 @@ alloy-rpc-types-eth.workspace = true
 alloy-rpc-types-engine.workspace = true
 base-common-consensus = { workspace = true, features = ["reth"] }
 base-common-rpc-types-engine = { workspace = true, features = ["reth"] }
+
+# discv5
+discv5.workspace = true
+reth-discv5.workspace = true
 
 # async
 tokio.workspace = true

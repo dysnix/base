@@ -2,7 +2,7 @@
 
 use std::{
     marker::PhantomData,
-    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
     sync::Arc,
 };
 
@@ -1092,21 +1092,29 @@ impl BaseNetworkBuilder {
                     builder = builder.disable_discv4_discovery();
                 }
                 if !args.discovery.disable_discovery {
-                    // Use rlpx address if none given
-                    let discv5_addr_ipv4 = args.discovery.discv5_addr.or(match rlpx_socket {
-                        SocketAddr::V4(addr) => Some(*addr.ip()),
-                        SocketAddr::V6(_) => None,
-                    });
-                    let discv5_addr_ipv6 = args.discovery.discv5_addr_ipv6.or(match rlpx_socket {
-                        SocketAddr::V4(_) => None,
-                        SocketAddr::V6(addr) => Some(*addr.ip()),
-                    });
-
                     init_azul_fork_id(
                         ctx.chain_spec().hardfork_fork_id(BaseUpgrade::V1),
                     );
 
                     let base_version = version_metadata().cargo_pkg_version.as_ref();
+
+                    // Override the discv5 config produced by discovery_v5_builder()
+                    // to inject our table_filter (reth's ConfigBuilder doesn't expose
+                    // table_filter). Ports come from CLI args; IPs are corrected by
+                    // amend_listen_config_wrt_rlpx at build() time.
+                    let listen_config = ListenConfig::from_two_sockets(
+                        Some(SocketAddrV4::new(
+                            Ipv4Addr::UNSPECIFIED,
+                            args.discovery.discv5_port,
+                        )),
+                        Some(SocketAddrV6::new(
+                            Ipv6Addr::UNSPECIFIED,
+                            args.discovery.discv5_port_ipv6,
+                            0,
+                            0,
+                        )),
+                    );
+
                     builder = builder.discovery_v5(
                         args.discovery
                             .discovery_v5_builder(
@@ -1122,23 +1130,9 @@ impl BaseNetworkBuilder {
                                 alloy_rlp::encode(base_version).into(),
                             )
                             .discv5_config(
-                                reth_discv5::discv5::ConfigBuilder::new(
-                                    ListenConfig::from_two_sockets(
-                                        discv5_addr_ipv4.map(|addr| {
-                                            SocketAddrV4::new(addr, args.discovery.discv5_port)
-                                        }),
-                                        discv5_addr_ipv6.map(|addr| {
-                                            SocketAddrV6::new(
-                                                addr,
-                                                args.discovery.discv5_port_ipv6,
-                                                0,
-                                                0,
-                                            )
-                                        }),
-                                    ),
-                                )
-                                .table_filter(base_table_filter)
-                                .build(),
+                                reth_discv5::discv5::ConfigBuilder::new(listen_config)
+                                    .table_filter(base_table_filter)
+                                    .build(),
                             ),
                     );
                 }
