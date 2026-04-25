@@ -134,7 +134,6 @@ needless-pass-by-ref-mut = "warn"
 string-lit-as-bytes = "warn"
 
 [profile.dev]
-debug = "line-tables-only"
 incremental = true
 
 [profile.release]
@@ -645,3 +644,5 @@ ark-ff = { version = "0.5.0", default-features = false }
 unsigned-varint = { version = "0.8", default-features = false }
 ark-bls12-381 = { version = "0.5.0", default-features = false }
 
+[patch.crates-io]
+discv5 = { path = "crates/utilities/discv5" }
