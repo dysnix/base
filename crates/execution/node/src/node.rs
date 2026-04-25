@@ -56,7 +56,6 @@ use reth_node_builder::{
         RethRpcMiddleware, RethRpcServerHandles, RpcAddOns, RpcContext, RpcHandle,
     },
 };
-use reth_node_core::version::version_metadata;
 use reth_primitives_traits::{SealedHeader, header::HeaderMut};
 use reth_provider::providers::ProviderFactoryBuilder;
 use reth_rpc_api::{DebugApiServer, DebugExecutionWitnessApiServer, eth::RpcTypes};
@@ -72,7 +71,7 @@ use serde::de::DeserializeOwned;
 use crate::{
     OpEngineApiBuilder, OpEngineTypes,
     args::{RollupArgs, TxpoolOrdering},
-    disc_filter::{BASE_ENR_KEY, BASE_PROTOCOL_ID},
+    disc_filter::BASE_PROTOCOL_ID,
     engine::OpEngineValidator,
 };
 
@@ -1087,8 +1086,6 @@ impl BaseNetworkBuilder {
                     builder = builder.disable_discv4_discovery();
                 }
                 if !args.discovery.disable_discovery {
-                    let base_version = version_metadata().cargo_pkg_version.as_ref();
-
                     // Override the discv5 config to set the Base protocol identity.
                     // Ports come from CLI args; IPs are corrected by
                     // amend_listen_config_wrt_rlpx at build() time.
@@ -1112,7 +1109,6 @@ impl BaseNetworkBuilder {
                                     .or_else(|| ctx.chain_spec().bootnodes())
                                     .unwrap_or_default(),
                             )
-                            .add_enr_kv_pair(BASE_ENR_KEY, alloy_rlp::encode(base_version).into())
                             .discv5_config(
                                 reth_discv5::discv5::ConfigBuilder::new(listen_config)
                                     .protocol_identity(reth_discv5::discv5::ProtocolIdentity {

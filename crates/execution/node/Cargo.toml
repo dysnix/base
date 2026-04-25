@@ -76,7 +76,6 @@ eyre.workspace = true
 serde.workspace = true
 futures.workspace = true
 tracing.workspace = true
-alloy-rlp.workspace = true
 humantime.workspace = true
 
 # test-utils dependencies

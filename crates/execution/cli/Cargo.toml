@@ -48,7 +48,6 @@ eyre.workspace = true
 tokio.workspace = true
 backon.workspace = true
 tracing.workspace = true
-alloy-rlp.workspace = true
 alloy-eips.workspace = true
 secp256k1.workspace = true
 tokio-stream.workspace = true

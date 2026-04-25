@@ -2,7 +2,7 @@
 
 use std::{net::SocketAddr, path::PathBuf};
 
-use base_node_core::{BASE_ENR_KEY, BASE_PROTOCOL_ID};
+use base_node_core::BASE_PROTOCOL_ID;
 use clap::Parser;
 use reth_cli_util::{get_secret_key, load_secret_key::rng_secret_key};
 use reth_discv4::{DiscoveryUpdate, Discv4, Discv4Config};
@@ -12,7 +12,6 @@ use reth_discv5::{
 };
 use reth_net_nat::{NatResolver, external_addr_with};
 use reth_network_peers::NodeRecord;
-use reth_node_core::version::version_metadata;
 use secp256k1::SecretKey;
 use tokio::select;
 use tokio_stream::StreamExt;
@@ -67,9 +66,7 @@ impl Command {
         if self.v5 {
             info!("Initializing discv5");
 
-            let base_version = version_metadata().cargo_pkg_version.as_ref();
             let config = Config::builder(self.v5_addr)
-                .add_enr_kv_pair(BASE_ENR_KEY, alloy_rlp::encode(base_version).into())
                 .discv5_config(
                     discv5::ConfigBuilder::new(DEFAULT_DISCOVERY_V5_LISTEN_CONFIG)
                         .protocol_identity(discv5::ProtocolIdentity {

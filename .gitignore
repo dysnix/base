@@ -14,4 +14,4 @@ docs/specs/.vocs/
 crates/succinct/elf/range-elf-embedded
 crates/succinct/elf/aggregation-elf
 crates/succinct/elf/*.bin
-.zed/
+

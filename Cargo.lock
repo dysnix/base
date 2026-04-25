@@ -3957,7 +3957,6 @@ name = "base-execution-cli"
 version = "0.8.0"
 dependencies = [
  "alloy-eips",
- "alloy-rlp",
  "backon",
  "base-common-consensus",
  "base-execution-chainspec",
@@ -4545,7 +4544,6 @@ dependencies = [
  "alloy-genesis",
  "alloy-network",
  "alloy-primitives",
- "alloy-rlp",
  "alloy-rpc-types-engine",
  "alloy-rpc-types-eth",
  "base-common-chains",

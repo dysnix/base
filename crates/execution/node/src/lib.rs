@@ -20,7 +20,7 @@ pub mod engine;
 pub use engine::OpEngineTypes;
 
 mod disc_filter;
-pub use disc_filter::{BASE_ENR_KEY, BASE_PROTOCOL_ID};
+pub use disc_filter::BASE_PROTOCOL_ID;
 
 pub mod node;
 pub use node::*;

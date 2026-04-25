@@ -1,5 +1,7 @@
 //! P2P subcommands, overriding the upstream bootnode with a discv5 NAT fix.
 
+use std::sync::Arc;
+
 use alloy_eips::BlockHashOrNumber;
 use backon::Retryable;
 use base_execution_chainspec::BaseChainSpec;
@@ -103,7 +105,11 @@ impl Command {
     }
 
     /// Returns the chain spec if one is embedded in the active subcommand.
-    pub const fn chain_spec(&self) -> Option<&std::sync::Arc<BaseChainSpec>> {
+    ///
+    /// Header and Body delegate chain parsing internally to [`DownloadArgs`] whose `chain`
+    /// field is private, so we return `None` for those. Only the log-directory path suffix
+    /// uses this value, so the impact is cosmetic.
+    pub const fn chain_spec(&self) -> Option<&Arc<BaseChainSpec>> {
         None
     }
 }
