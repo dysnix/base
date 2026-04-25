@@ -113,11 +113,12 @@ fn filter_enr(enr: &Enr, azul_fork_id: Option<ForkId>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloy_rlp::Encodable;
     use bytes::BytesMut;
     use discv5::enr::{CombinedKey, Enr as EnrBuilder};
     use reth_ethereum_forks::ForkHash;
+
+    use super::*;
 
     fn build_enr(pairs: &[(&[u8], Vec<u8>)]) -> Enr {
         let key = CombinedKey::generate_secp256k1();

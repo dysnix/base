@@ -2,6 +2,8 @@
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
+use base_common_chains::BaseUpgrade;
+use base_execution_chainspec::BaseChainSpec;
 use base_node_core::{BASE_ENR_KEY, base_table_filter, init_azul_fork_id};
 use clap::Parser;
 use reth_cli::chainspec::ChainSpecParser;
@@ -18,9 +20,6 @@ use secp256k1::SecretKey;
 use tokio::select;
 use tokio_stream::StreamExt;
 use tracing::{info, warn};
-
-use base_common_chains::BaseUpgrade;
-use base_execution_chainspec::BaseChainSpec;
 
 /// Start a discovery-only bootnode.
 #[derive(Parser, Debug)]
@@ -82,16 +81,11 @@ impl<C: ChainSpecParser<ChainSpec = BaseChainSpec>> Command<C> {
         if self.v5 {
             info!("Initializing discv5");
 
-            init_azul_fork_id(
-                self.chain.hardfork_fork_id(BaseUpgrade::V1),
-            );
+            init_azul_fork_id(self.chain.hardfork_fork_id(BaseUpgrade::V1));
 
             let base_version = version_metadata().cargo_pkg_version.as_ref();
             let config = Config::builder(self.v5_addr)
-                .add_enr_kv_pair(
-                    BASE_ENR_KEY,
-                    alloy_rlp::encode(base_version).into(),
-                )
+                .add_enr_kv_pair(BASE_ENR_KEY, alloy_rlp::encode(base_version).into())
                 .discv5_config(
                     discv5::ConfigBuilder::new(DEFAULT_DISCOVERY_V5_LISTEN_CONFIG)
                         .table_filter(base_table_filter)

@@ -33,7 +33,6 @@ use base_execution_txpool::{
 };
 use discv5::ListenConfig;
 use reth_chainspec::{BaseFeeParams, ChainSpecProvider, EthChainSpec, Hardforks};
-use reth_node_core::version::version_metadata;
 use reth_evm::ConfigureEvm;
 use reth_network::{
     NetworkConfig, NetworkHandle, NetworkManager, NetworkPrimitives, PeersInfo,
@@ -57,6 +56,7 @@ use reth_node_builder::{
         RethRpcMiddleware, RethRpcServerHandles, RpcAddOns, RpcContext, RpcHandle,
     },
 };
+use reth_node_core::version::version_metadata;
 use reth_primitives_traits::{SealedHeader, header::HeaderMut};
 use reth_provider::providers::ProviderFactoryBuilder;
 use reth_rpc_api::{DebugApiServer, DebugExecutionWitnessApiServer, eth::RpcTypes};
@@ -68,7 +68,6 @@ use reth_transaction_pool::{
 };
 use reth_trie_common::KeccakKeyHasher;
 use serde::de::DeserializeOwned;
-
 
 use crate::{
     OpEngineApiBuilder, OpEngineTypes,
@@ -1092,9 +1091,7 @@ impl BaseNetworkBuilder {
                     builder = builder.disable_discv4_discovery();
                 }
                 if !args.discovery.disable_discovery {
-                    init_azul_fork_id(
-                        ctx.chain_spec().hardfork_fork_id(BaseUpgrade::V1),
-                    );
+                    init_azul_fork_id(ctx.chain_spec().hardfork_fork_id(BaseUpgrade::V1));
 
                     let base_version = version_metadata().cargo_pkg_version.as_ref();
 
@@ -1103,10 +1100,7 @@ impl BaseNetworkBuilder {
                     // table_filter). Ports come from CLI args; IPs are corrected by
                     // amend_listen_config_wrt_rlpx at build() time.
                     let listen_config = ListenConfig::from_two_sockets(
-                        Some(SocketAddrV4::new(
-                            Ipv4Addr::UNSPECIFIED,
-                            args.discovery.discv5_port,
-                        )),
+                        Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, args.discovery.discv5_port)),
                         Some(SocketAddrV6::new(
                             Ipv6Addr::UNSPECIFIED,
                             args.discovery.discv5_port_ipv6,
@@ -1125,10 +1119,7 @@ impl BaseNetworkBuilder {
                                     .or_else(|| ctx.chain_spec().bootnodes())
                                     .unwrap_or_default(),
                             )
-                            .add_enr_kv_pair(
-                                BASE_ENR_KEY,
-                                alloy_rlp::encode(base_version).into(),
-                            )
+                            .add_enr_kv_pair(BASE_ENR_KEY, alloy_rlp::encode(base_version).into())
                             .discv5_config(
                                 reth_discv5::discv5::ConfigBuilder::new(listen_config)
                                     .table_filter(base_table_filter)
