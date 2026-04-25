@@ -2,7 +2,7 @@
 
 use std::{
     marker::PhantomData,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
+    net::{SocketAddrV4, SocketAddrV6},
     sync::Arc,
 };
 
@@ -31,7 +31,6 @@ use base_execution_txpool::{
     BaseOrdering, BasePooledTransaction, BaseTransactionPool, OpPooledTx, OpTransactionValidator,
     TimestampedTransaction,
 };
-use discv5::ListenConfig;
 use reth_chainspec::{BaseFeeParams, ChainSpecProvider, EthChainSpec, Hardforks};
 use reth_evm::ConfigureEvm;
 use reth_network::{
@@ -1086,38 +1085,53 @@ impl BaseNetworkBuilder {
                     builder = builder.disable_discv4_discovery();
                 }
                 if !args.discovery.disable_discovery {
-                    // Override the discv5 config to set the Base protocol identity.
-                    // Ports come from CLI args; IPs are corrected by
-                    // amend_listen_config_wrt_rlpx at build() time.
-                    let listen_config = ListenConfig::from_two_sockets(
-                        Some(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, args.discovery.discv5_port)),
-                        Some(SocketAddrV6::new(
-                            Ipv6Addr::UNSPECIFIED,
-                            args.discovery.discv5_port_ipv6,
-                            0,
-                            0,
-                        )),
+                    let mut discv5_builder = args.discovery.discovery_v5_builder(
+                        rlpx_socket,
+                        ctx.config()
+                            .network
+                            .resolved_bootnodes()
+                            .or_else(|| ctx.chain_spec().bootnodes())
+                            .unwrap_or_default(),
                     );
 
-                    builder = builder.discovery_v5(
-                        args.discovery
-                            .discovery_v5_builder(
-                                rlpx_socket,
-                                ctx.config()
-                                    .network
-                                    .resolved_bootnodes()
-                                    .or_else(|| ctx.chain_spec().bootnodes())
-                                    .unwrap_or_default(),
-                            )
-                            .discv5_config(
-                                reth_discv5::discv5::ConfigBuilder::new(listen_config)
-                                    .protocol_identity(reth_discv5::discv5::ProtocolIdentity {
-                                        protocol_id: BASE_PROTOCOL_ID,
-                                        ..Default::default()
-                                    })
-                                    .build(),
-                            ),
+                    // Inject the Base protocol identity into the discv5 config.
+                    //
+                    // `discovery_v5_builder` already called `.discv5_config()` with
+                    // the correct listen addresses and ports. We must rebuild the
+                    // inner config with the same listen settings plus our custom
+                    // `protocol_id` so that Base nodes form a dedicated discovery
+                    // subnetwork. Calling `.discv5_config()` again replaces the
+                    // previous value, so we replicate the listen config logic here.
+                    let discv5_addr_ipv4 =
+                        args.discovery.discv5_addr.or_else(|| match rlpx_socket {
+                            std::net::SocketAddr::V4(addr) => Some(*addr.ip()),
+                            std::net::SocketAddr::V6(_) => None,
+                        });
+                    let discv5_addr_ipv6 =
+                        args.discovery.discv5_addr_ipv6.or_else(|| match rlpx_socket {
+                            std::net::SocketAddr::V4(_) => None,
+                            std::net::SocketAddr::V6(addr) => Some(*addr.ip()),
+                        });
+                    let listen_config = reth_discv5::discv5::ListenConfig::from_two_sockets(
+                        discv5_addr_ipv4
+                            .map(|addr| SocketAddrV4::new(addr, args.discovery.discv5_port)),
+                        discv5_addr_ipv6.map(|addr| {
+                            SocketAddrV6::new(addr, args.discovery.discv5_port_ipv6, 0, 0)
+                        }),
                     );
+                    let has_custom_addrs =
+                        discv5_addr_ipv4.is_some() || args.discovery.discv5_addr_ipv6.is_some();
+                    let mut inner_builder = reth_discv5::discv5::ConfigBuilder::new(listen_config);
+                    inner_builder.protocol_identity(reth_discv5::discv5::ProtocolIdentity {
+                        protocol_id: BASE_PROTOCOL_ID,
+                        ..Default::default()
+                    });
+                    if has_custom_addrs || args.discovery.disable_nat {
+                        inner_builder.disable_enr_update();
+                    }
+                    discv5_builder = discv5_builder.discv5_config(inner_builder.build());
+
+                    builder = builder.discovery_v5(discv5_builder);
                 }
 
                 builder
