@@ -1,0 +1,34 @@
+// Project-local debug tasks
+//
+// For more documentation on how to configure debug tasks,
+// see: https://zed.dev/docs/debugger
+[
+    {
+        "label": "Build & Debug native binary",
+        "program": "$ZED_WORKTREE_ROOT/target/debug/base-reth-node",
+        // sourceLanguages is required for CodeLLDB (not GDB) when using Rust
+        "sourceLanguages": ["rust"],
+        "env": {
+            "RUST_LOG": "debug,net=trace,base=off,reth::cli=info,reth_node_events=off,engine=info,trie=off"
+        },
+        "args": [
+            "node",
+            "-vvvv",
+            "--chain",
+            "base-zeronet",
+            "--datadir=/home/meyer9/snapshots/zeronet",
+            "--http",
+            "--ws",
+            "--authrpc.jwtsecret",
+            "/home/meyer9/jwt.secret",
+            "--addr",
+            "0.0.0.0",
+            "--nat",
+            "extip:23.240.242.56",
+            "--http.api",
+            "admin,eth,debug,net"
+        ],
+        "request": "launch",
+        "adapter": "CodeLLDB"
+    }
+]

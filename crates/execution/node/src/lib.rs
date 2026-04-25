@@ -20,7 +20,7 @@ pub mod engine;
 pub use engine::OpEngineTypes;
 
 mod disc_filter;
-pub use disc_filter::{BASE_ENR_KEY, base_table_filter, init_azul_fork_id};
+pub use disc_filter::{BASE_ENR_KEY, BASE_PROTOCOL_ID, base_table_filter, init_azul_fork_id};
 
 pub mod node;
 pub use node::*;

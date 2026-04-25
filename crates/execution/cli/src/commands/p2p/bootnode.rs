@@ -4,7 +4,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use base_common_chains::BaseUpgrade;
 use base_execution_chainspec::BaseChainSpec;
-use base_node_core::{BASE_ENR_KEY, base_table_filter, init_azul_fork_id};
+use base_node_core::{BASE_ENR_KEY, BASE_PROTOCOL_ID, base_table_filter, init_azul_fork_id};
 use clap::Parser;
 use reth_cli::chainspec::ChainSpecParser;
 use reth_cli_util::{get_secret_key, load_secret_key::rng_secret_key};
@@ -89,6 +89,10 @@ impl<C: ChainSpecParser<ChainSpec = BaseChainSpec>> Command<C> {
                 .discv5_config(
                     discv5::ConfigBuilder::new(DEFAULT_DISCOVERY_V5_LISTEN_CONFIG)
                         .table_filter(base_table_filter)
+                        .protocol_identity(discv5::ProtocolIdentity {
+                            protocol_id: BASE_PROTOCOL_ID,
+                            ..Default::default()
+                        })
                         .build(),
                 )
                 .build();

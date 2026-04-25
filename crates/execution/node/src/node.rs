@@ -72,7 +72,7 @@ use serde::de::DeserializeOwned;
 use crate::{
     OpEngineApiBuilder, OpEngineTypes,
     args::{RollupArgs, TxpoolOrdering},
-    disc_filter::{BASE_ENR_KEY, base_table_filter, init_azul_fork_id},
+    disc_filter::{BASE_ENR_KEY, BASE_PROTOCOL_ID, base_table_filter, init_azul_fork_id},
     engine::OpEngineValidator,
 };
 
@@ -1123,6 +1123,10 @@ impl BaseNetworkBuilder {
                             .discv5_config(
                                 reth_discv5::discv5::ConfigBuilder::new(listen_config)
                                     .table_filter(base_table_filter)
+                                    .protocol_identity(reth_discv5::discv5::ProtocolIdentity {
+                                        protocol_id: BASE_PROTOCOL_ID,
+                                        ..Default::default()
+                                    })
                                     .build(),
                             ),
                     );
