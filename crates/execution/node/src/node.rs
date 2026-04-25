@@ -8,7 +8,7 @@ use std::{
 
 use alloy_consensus::BlockHeader;
 use alloy_primitives::{Address, B64, B256};
-use base_common_chains::Upgrades;
+use base_common_chains::{BaseUpgrade, Upgrades};
 use base_common_consensus::BasePrimitives;
 use base_common_rpc_types_engine::{BasePayloadAttributes, ExecutionData};
 use base_execution_chainspec::BaseChainSpec;
@@ -33,7 +33,7 @@ use base_execution_txpool::{
 };
 use discv5::ListenConfig;
 use reth_chainspec::{BaseFeeParams, ChainSpecProvider, EthChainSpec, Hardforks};
-use reth_discv5::NetworkStackId;
+use reth_node_core::version::version_metadata;
 use reth_evm::ConfigureEvm;
 use reth_network::{
     NetworkConfig, NetworkHandle, NetworkManager, NetworkPrimitives, PeersInfo,
@@ -68,11 +68,12 @@ use reth_transaction_pool::{
 };
 use reth_trie_common::KeccakKeyHasher;
 use serde::de::DeserializeOwned;
-use tracing::warn;
+
 
 use crate::{
     OpEngineApiBuilder, OpEngineTypes,
     args::{RollupArgs, TxpoolOrdering},
+    disc_filter::{BASE_ENR_KEY, base_table_filter, init_azul_fork_id},
     engine::OpEngineValidator,
 };
 
@@ -1072,7 +1073,11 @@ impl BaseNetworkBuilder {
         ctx: &BuilderContext<Node>,
     ) -> eyre::Result<NetworkConfig<Node::Provider, NetworkP>>
     where
-        Node: FullNodeTypes<Types: NodeTypes<ChainSpec: Hardforks>>,
+        Node: FullNodeTypes<
+            Types: NodeTypes<
+                ChainSpec: Hardforks + std::ops::Deref<Target = reth_chainspec::ChainSpec>,
+            >,
+        >,
         NetworkP: NetworkPrimitives,
     {
         let disable_txpool_gossip = self.disable_txpool_gossip;
@@ -1097,6 +1102,11 @@ impl BaseNetworkBuilder {
                         SocketAddr::V6(addr) => Some(*addr.ip()),
                     });
 
+                    init_azul_fork_id(
+                        ctx.chain_spec().hardfork_fork_id(BaseUpgrade::V1),
+                    );
+
+                    let base_version = version_metadata().cargo_pkg_version.as_ref();
                     builder = builder.discovery_v5(
                         args.discovery
                             .discovery_v5_builder(
@@ -1106,6 +1116,10 @@ impl BaseNetworkBuilder {
                                     .resolved_bootnodes()
                                     .or_else(|| ctx.chain_spec().bootnodes())
                                     .unwrap_or_default(),
+                            )
+                            .add_enr_kv_pair(
+                                BASE_ENR_KEY,
+                                alloy_rlp::encode(base_version).into(),
                             )
                             .discv5_config(
                                 reth_discv5::discv5::ConfigBuilder::new(
@@ -1123,21 +1137,7 @@ impl BaseNetworkBuilder {
                                         }),
                                     ),
                                 )
-                                .table_filter(|enr| {
-                                    if enr.get_raw_rlp(NetworkStackId::ETH).is_some() {
-                                        warn!("ignoring peer with ETH network stack");
-                                        return false;
-                                    }
-                                    if enr.get_raw_rlp(NetworkStackId::ETH2).is_some() {
-                                        warn!("ignoring peer with ETH2 network stack");
-                                        return false;
-                                    }
-                                    if enr.get_raw_rlp(NetworkStackId::OPSTACK).is_some() {
-                                        warn!("ignoring peer with OPSTACK network stack");
-                                        return false;
-                                    }
-                                    true
-                                })
+                                .table_filter(base_table_filter)
                                 .build(),
                             ),
                     );
@@ -1159,7 +1159,11 @@ impl BaseNetworkBuilder {
 
 impl<Node, Pool> NetworkBuilder<Node, Pool> for BaseNetworkBuilder
 where
-    Node: FullNodeTypes<Types: NodeTypes<ChainSpec: Hardforks>>,
+    Node: FullNodeTypes<
+        Types: NodeTypes<
+            ChainSpec: Hardforks + std::ops::Deref<Target = reth_chainspec::ChainSpec>,
+        >,
+    >,
     Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TxTy<Node::Types>>>
         + Unpin
         + 'static,

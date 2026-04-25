@@ -110,7 +110,10 @@ impl Command {
     /// field is private, so we return `None` for those. Only the log-directory path suffix
     /// uses this value, so the impact is cosmetic.
     pub const fn chain_spec(&self) -> Option<&Arc<BaseChainSpec>> {
-        None
+        match &self.command {
+            Subcommands::Bootnode(cmd) => cmd.chain_spec(),
+            _ => None,
+        }
     }
 }
 
@@ -135,7 +138,7 @@ enum Subcommands {
     /// `RLPx` utilities.
     Rlpx(rlpx::Command),
     /// Start a discovery-only bootnode.
-    Bootnode(bootnode::Command),
+    Bootnode(bootnode::Command<crate::chainspec::BaseChainSpecParser>),
     /// Print the enode identifier of this node.
     Enode(enode::Command),
 }

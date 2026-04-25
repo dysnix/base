@@ -40,6 +40,9 @@ reth-chainspec.workspace = true
 reth-cli-runner.workspace = true
 reth-node-builder.workspace = true
 
+# base
+base-common-chains.workspace = true
+
 # misc
 futures.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
@@ -48,6 +51,7 @@ eyre.workspace = true
 tokio.workspace = true
 backon.workspace = true
 tracing.workspace = true
+alloy-rlp.workspace = true
 alloy-eips.workspace = true
 secp256k1.workspace = true
 tokio-stream.workspace = true
