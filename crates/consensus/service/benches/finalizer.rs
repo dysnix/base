@@ -51,11 +51,20 @@ fn bench_enqueue_for_finalization(c: &mut Criterion) {
 fn bench_try_finalize_next(c: &mut Criterion) {
     let mut group = c.benchmark_group("consensus_finalizer/try_finalize_next");
 
-    let finalized_tip = finalized_l1(ENTRY_COUNT / 2);
+    let finalized_first = finalized_l1(1);
+    group.bench_function("4096_entries_finalize_first", |b| {
+        b.iter_batched(
+            finalizer_with_entries,
+            |mut finalizer| black_box(finalizer.try_finalize_next(black_box(finalized_first))),
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    let finalized_half = finalized_l1(ENTRY_COUNT / 2);
     group.bench_function("4096_entries_finalize_half", |b| {
         b.iter_batched(
             finalizer_with_entries,
-            |mut finalizer| black_box(finalizer.try_finalize_next(black_box(finalized_tip))),
+            |mut finalizer| black_box(finalizer.try_finalize_next(black_box(finalized_half))),
             criterion::BatchSize::SmallInput,
         );
     });
