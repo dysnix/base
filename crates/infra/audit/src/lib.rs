@@ -24,6 +24,9 @@ pub use reader::{
     Event, EventReader, KafkaAuditLogReader, assign_topic_partition, create_kafka_consumer,
 };
 
+mod rpc;
+pub use rpc::{AuditArchiverApiServer, AuditArchiverRpc};
+
 mod storage;
 pub use storage::{
     BundleEventS3Reader, BundleHistory, BundleHistoryEvent, EventWriter, S3EventReaderWriter,

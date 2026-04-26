@@ -22,6 +22,9 @@ pub use meter::{MeterBundleResponse, OpcodeGas, TransactionResult};
 mod parsed;
 pub use parsed::ParsedBundle;
 
+mod rejected;
+pub use rejected::{RejectedTransaction, RejectionReason};
+
 mod traits;
 pub use traits::{BundleExtensions, BundleTxs};
 

@@ -1,6 +1,11 @@
 //! Base Chain configuration.
 
+use alloy_chains::Chain;
+use alloy_eips::eip1898::BlockNumHash;
 use alloy_primitives::{Address, B256, U256, address, b256, uint};
+use base_common_genesis::{
+    ChainGenesis, FeeConfig, HardForkConfig, HardforkConfig, RollupConfig, SystemConfig,
+};
 
 /// Complete configuration for a Base chain
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +148,100 @@ impl ChainConfig {
             _ => None,
         }
     }
+
+    /// Returns the EIP-1559 [`FeeConfig`] for this chain.
+    pub const fn fee_config(&self) -> FeeConfig {
+        FeeConfig {
+            eip1559_elasticity: self.eip1559_elasticity,
+            eip1559_denominator: self.eip1559_denominator,
+            eip1559_denominator_canyon: self.eip1559_denominator_canyon,
+        }
+    }
+
+    /// Returns the [`HardForkConfig`] (Base upgrade activation timestamps) for this chain.
+    pub const fn hardfork_config(&self) -> HardForkConfig {
+        HardForkConfig {
+            regolith_time: Some(self.regolith_timestamp),
+            canyon_time: Some(self.canyon_timestamp),
+            delta_time: Some(self.delta_timestamp),
+            ecotone_time: Some(self.ecotone_timestamp),
+            fjord_time: Some(self.fjord_timestamp),
+            granite_time: Some(self.granite_timestamp),
+            holocene_time: Some(self.holocene_timestamp),
+            pectra_blob_schedule_time: self.pectra_blob_schedule_timestamp,
+            isthmus_time: Some(self.isthmus_timestamp),
+            jovian_time: Some(self.jovian_timestamp),
+            base: HardforkConfig { azul: self.azul_timestamp },
+        }
+    }
+
+    /// Returns the [`ChainGenesis`] (L1/L2 genesis anchor + initial system config) for this chain.
+    pub const fn chain_genesis(&self) -> ChainGenesis {
+        ChainGenesis {
+            l1: BlockNumHash { hash: self.genesis_l1_hash, number: self.genesis_l1_number },
+            l2: BlockNumHash { hash: self.genesis_l2_hash, number: self.genesis_l2_number },
+            l2_time: self.genesis_l2_time,
+            system_config: Some(SystemConfig {
+                batcher_address: self.genesis_batcher_address,
+                overhead: self.genesis_overhead,
+                scalar: self.genesis_scalar,
+                gas_limit: self.genesis_gas_limit,
+                base_fee_scalar: None,
+                blob_base_fee_scalar: None,
+                eip1559_denominator: None,
+                eip1559_elasticity: None,
+                operator_fee_scalar: None,
+                operator_fee_constant: None,
+                min_base_fee: None,
+                da_footprint_gas_scalar: None,
+            }),
+        }
+    }
+
+    /// Returns the full [`RollupConfig`] for this chain, derived from its [`ChainConfig`].
+    pub fn rollup_config(&self) -> RollupConfig {
+        RollupConfig {
+            genesis: self.chain_genesis(),
+            block_time: self.block_time,
+            max_sequencer_drift: self.max_sequencer_drift,
+            seq_window_size: self.seq_window_size,
+            channel_timeout: self.channel_timeout,
+            granite_channel_timeout: RollupConfig::GRANITE_CHANNEL_TIMEOUT,
+            l1_chain_id: self.l1_chain_id,
+            l2_chain_id: Chain::from_id(self.chain_id),
+            hardforks: self.hardfork_config(),
+            batch_inbox_address: self.batch_inbox_address,
+            deposit_contract_address: self.deposit_contract_address,
+            l1_system_config_address: self.system_config_address,
+            protocol_versions_address: self.protocol_versions_address,
+            blobs_enabled_l1_timestamp: None,
+            chain_op_config: self.fee_config(),
+        }
+    }
+}
+
+impl From<&ChainConfig> for FeeConfig {
+    fn from(cfg: &ChainConfig) -> Self {
+        cfg.fee_config()
+    }
+}
+
+impl From<&ChainConfig> for HardForkConfig {
+    fn from(cfg: &ChainConfig) -> Self {
+        cfg.hardfork_config()
+    }
+}
+
+impl From<&ChainConfig> for ChainGenesis {
+    fn from(cfg: &ChainConfig) -> Self {
+        cfg.chain_genesis()
+    }
+}
+
+impl From<&ChainConfig> for RollupConfig {
+    fn from(cfg: &ChainConfig) -> Self {
+        cfg.rollup_config()
+    }
 }
 
 const MAINNET: ChainConfig = ChainConfig {
@@ -197,10 +296,15 @@ const MAINNET: ChainConfig = ChainConfig {
         "enr:-J24QHmGyBwUZXIcsGYMaUqGGSl4CFdx9Tozu-vQCn5bHIQbR7On7dZbU61vYvfrJr30t0iahSqhc64J46MnUO2JvQaGAYiOoCKKgmlkgnY0gmlwhAPnCzSHb3BzdGFja4OFQgCJc2VjcDI1NmsxoQINc4fSijfbNIiGhcgvwjsjxVFJHUstK9L1T8OTKUjgloN0Y3CCJAaDdWRwgiQG",
         "enr:-J24QG3ypT4xSu0gjb5PABCmVxZqBjVw9ca7pvsI8jl4KATYAnxBmfkaIuEqy9sKvDHKuNCsy57WwK9wTt2aQgcaDDyGAYiOoGAXgmlkgnY0gmlwhDbGmZaHb3BzdGFja4OFQgCJc2VjcDI1NmsxoQIeAK_--tcLEiu7HvoUlbV52MspE0uCocsx1f_rYvRenIN0Y3CCJAaDdWRwgiQG",
         "enode://87a32fd13bd596b2ffca97020e31aef4ddcc1bbd4b95bb633d16c1329f654f34049ed240a36b449fda5e5225d70fe40bc667f53c304b71f8e68fc9d448690b51@3.231.138.188:30301",
+        "enode://87a32fd13bd596b2ffca97020e31aef4ddcc1bbd4b95bb633d16c1329f654f34049ed240a36b449fda5e5225d70fe40bc667f53c304b71f8e68fc9d448690b51@3.231.138.188:9200",
         "enode://ca21ea8f176adb2e229ce2d700830c844af0ea941a1d8152a9513b966fe525e809c3a6c73a2c18a12b74ed6ec4380edf91662778fe0b79f6a591236e49e176f9@184.72.129.189:30301",
+        "enode://ca21ea8f176adb2e229ce2d700830c844af0ea941a1d8152a9513b966fe525e809c3a6c73a2c18a12b74ed6ec4380edf91662778fe0b79f6a591236e49e176f9@184.72.129.189:9200",
         "enode://acf4507a211ba7c1e52cdf4eef62cdc3c32e7c9c47998954f7ba024026f9a6b2150cd3f0b734d9c78e507ab70d59ba61dfe5c45e1078c7ad0775fb251d7735a2@3.220.145.177:30301",
+        "enode://acf4507a211ba7c1e52cdf4eef62cdc3c32e7c9c47998954f7ba024026f9a6b2150cd3f0b734d9c78e507ab70d59ba61dfe5c45e1078c7ad0775fb251d7735a2@3.220.145.177:9200",
         "enode://8a5a5006159bf079d06a04e5eceab2a1ce6e0f721875b2a9c96905336219dbe14203d38f70f3754686a6324f786c2f9852d8c0dd3adac2d080f4db35efc678c5@3.231.11.52:30301",
+        "enode://8a5a5006159bf079d06a04e5eceab2a1ce6e0f721875b2a9c96905336219dbe14203d38f70f3754686a6324f786c2f9852d8c0dd3adac2d080f4db35efc678c5@3.231.11.52:9200",
         "enode://cdadbe835308ad3557f9a1de8db411da1a260a98f8421d62da90e71da66e55e98aaa8e90aa7ce01b408a54e4bd2253d701218081ded3dbe5efbbc7b41d7cef79@54.198.153.150:30301",
+        "enode://cdadbe835308ad3557f9a1de8db411da1a260a98f8421d62da90e71da66e55e98aaa8e90aa7ce01b408a54e4bd2253d701218081ded3dbe5efbbc7b41d7cef79@54.198.153.150:9200",
     ],
 
     genesis_json: include_str!("../res/genesis/base.json"),
@@ -253,7 +357,9 @@ const SEPOLIA: ChainConfig = ChainConfig {
 
     bootnodes: &[
         "enode://548f715f3fc388a7c917ba644a2f16270f1ede48a5d88a4d14ea287cc916068363f3092e39936f1a3e7885198bef0e5af951f1d7b1041ce8ba4010917777e71f@18.210.176.114:30301",
+        "enode://548f715f3fc388a7c917ba644a2f16270f1ede48a5d88a4d14ea287cc916068363f3092e39936f1a3e7885198bef0e5af951f1d7b1041ce8ba4010917777e71f@18.210.176.114:9200",
         "enode://6f10052847a966a725c9f4adf6716f9141155b99a0fb487fea3f51498f4c2a2cb8d534e680ee678f9447db85b93ff7c74562762c3714783a7233ac448603b25f@107.21.251.55:30301",
+        "enode://6f10052847a966a725c9f4adf6716f9141155b99a0fb487fea3f51498f4c2a2cb8d534e680ee678f9447db85b93ff7c74562762c3714783a7233ac448603b25f@107.21.251.55:9200",
         "enr:-J64QFa3qMsONLGphfjEkeYyF6Jkil_jCuJmm7_a42ckZeUQGLVzrzstZNb1dgBp1GGx9bzImq5VxJLP-BaptZThGiWGAYrTytOvgmlkgnY0gmlwhGsV-zeHb3BzdGFja4S0lAUAiXNlY3AyNTZrMaEDahfSECTIS_cXyZ8IyNf4leANlZnrsMEWTkEYxf4GMCmDdGNwgiQGg3VkcIIkBg",
         "enr:-J64QBwRIWAco7lv6jImSOjPU_W266lHXzpAS5YOh7WmgTyBZkgLgOwo_mxKJq3wz2XRbsoBItbv1dCyjIoNq67mFguGAYrTxM42gmlkgnY0gmlwhBLSsHKHb3BzdGFja4S0lAUAiXNlY3AyNTZrMaEDmoWSi8hcsRpQf2eJsNUx-sqv6fH4btmo2HsAzZFAKnKDdGNwgiQGg3VkcIIkBg",
     ],
@@ -409,9 +515,23 @@ const ZERONET: ChainConfig = ChainConfig {
     bootnodes: &[
         "enr:-J-4QDS5Z5P4BoDbOlLGOcdXjcv2Nc5_PgP28lIxP4lKU6qYR-m10c8rHdcHk0DdmTvZpndoSpuK__688dmX-tlOsNKGAZ22NI20gmlkgnY0gmlwhCzGBHaHb3BzdGFja4WA-80FAIlzZWNwMjU2azGhA4Qs8_ZWeMdUNldNdjnAxd018gjWofqKoW4_pr0qzvTtg3RjcIIkBoN1ZHCCJAY",
         "enode://cd4528698249ad8b36fa7b1cad75aa5683ad355e6f0776629eaff1d83cfbb575062330d711efefbfa0d531c86969c2daf9a88fb28cddbbad216f46ac367981eb@44.198.4.118:30301",
+        "enode://cd4528698249ad8b36fa7b1cad75aa5683ad355e6f0776629eaff1d83cfbb575062330d711efefbfa0d531c86969c2daf9a88fb28cddbbad216f46ac367981eb@44.198.4.118:9200",
         "enr:-J-4QKgMF6zAv7u_75LTXLJKgLtEn4HcI8gaqsDAl78nfw7VQE-EN6dUZCZW4_CI42MAOWUCinrV8rP5hbBu3aje-u-GAZ22LUBogmlkgnY0gmlwhDQCC1-Hb3BzdGFja4WA-80FAIlzZWNwMjU2azGhArwjzoKlEKQiEXtuZ0qT23Wy_3IeEXbAJo7VKDO2Yovig3RjcIIkBoN1ZHCCJAY",
         "enode://ea188fb5482ff8eb372956d674ecb6d09cbd42e6874121957a47b2ad252f54953c49866d2dcabcfc272fcc63e163a67b097fe4354283e56ddf077fc017b2a127@52.2.11.95:30301",
+        "enode://ea188fb5482ff8eb372956d674ecb6d09cbd42e6874121957a47b2ad252f54953c49866d2dcabcfc272fcc63e163a67b097fe4354283e56ddf077fc017b2a127@52.2.11.95:9200",
     ],
 
     genesis_json: include_str!("../res/genesis/zeronet_base.json"),
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mainnet_fee_config_matches_const() {
+        // Guard against drift between the hardcoded `FeeConfig::BASE_MAINNET` constant
+        // (used as a serde default) and the canonical `ChainConfig::mainnet().fee_config()`.
+        assert_eq!(ChainConfig::mainnet().fee_config(), FeeConfig::base_mainnet());
+    }
+}

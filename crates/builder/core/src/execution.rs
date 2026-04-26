@@ -8,12 +8,12 @@ use ExecutionMeteringLimitExceeded::{
     BlockStateRootGas, FlashblockExecutionTime, TransactionExecutionTime,
 };
 use alloy_primitives::{Address, U256};
+use base_access_lists::FlashblockAccessListBuilder;
+use base_bundles::RejectedTransaction;
 use base_common_consensus::{BaseReceipt, BaseTransactionSigned};
 use base_common_evm::BaseTransactionError;
 use derive_more::Display;
 use thiserror::Error;
-
-use crate::flashblocks::FlashblocksExecutionInfo;
 
 /// Resource limits configuration for transaction and block constraints.
 ///
@@ -211,6 +211,19 @@ pub enum TxnOutcome {
     RevertedAndExcluded,
 }
 
+/// Execution information specific to flashblocks.
+///
+/// Tracks the last consumed flashblock index and manages the
+/// flashblock-level access list builder for progressive block construction.
+#[derive(Debug, Default, Clone)]
+pub struct FlashblocksExecutionInfo {
+    /// Index of the last consumed flashblock
+    pub(crate) last_flashblock_index: usize,
+
+    /// Flashblock-level access list builder
+    pub(crate) access_list_builder: FlashblockAccessListBuilder,
+}
+
 /// Accumulated execution state for the current block being built.
 #[derive(Default, Debug)]
 pub struct ExecutionInfo {
@@ -238,6 +251,8 @@ pub struct ExecutionInfo {
     pub extra: FlashblocksExecutionInfo,
     /// DA Footprint Scalar for Jovian
     pub da_footprint_scalar: Option<u16>,
+    /// Rejected transactions accumulated during block building, flushed after finalization.
+    pub rejected_txs: Vec<RejectedTransaction>,
 }
 
 impl ExecutionInfo {
@@ -255,6 +270,7 @@ impl ExecutionInfo {
             total_fees: U256::ZERO,
             extra: Default::default(),
             da_footprint_scalar: None,
+            rejected_txs: Vec::new(),
         }
     }
 

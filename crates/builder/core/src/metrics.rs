@@ -98,6 +98,8 @@ base_metrics::define_metrics! {
     metering_unknown_transaction: counter,
     #[describe("Number of LRU evictions from MeteringStore")]
     metering_store_lru_evictions: counter,
+    #[describe("Number of entries in the metering store that expired due to TTL")]
+    metering_store_ttl_expirations: counter,
     #[describe("Size of MeteringStore")]
     metering_store_size: gauge,
     #[describe("Transactions inserted into the rejection cache")]
@@ -207,6 +209,14 @@ base_metrics::define_metrics! {
     tx_accounts_modified: histogram,
     #[describe("Number of storage slots modified by a transaction (from EVM post-state)")]
     tx_storage_slots_modified: histogram,
+    #[describe("Rejected transaction batch drops due to full forwarding channel")]
+    rejected_tx_channel_drops: counter,
+    #[describe("Rejected transaction drops due to per-block accumulation limit")]
+    rejected_tx_per_block_drops: counter,
+    #[describe("Rejected txs forwarded to audit-archiver")]
+    rejected_txs_forwarded: counter,
+    #[describe("Number of failed rejected transaction batch forwards to audit-archiver")]
+    rejected_tx_forward_failures: counter,
 }
 
 impl BuilderMetrics {

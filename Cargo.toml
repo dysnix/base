@@ -9,7 +9,7 @@ exclude = [".github/"]
 
 [workspace]
 resolver = "2"
-exclude = ["bin/prover"]
+exclude = ["bin/prover", "crates/proof/succinct/programs"]
 members = [
   "bin/*",
   "bin/prover/nitro-host",
@@ -24,10 +24,7 @@ members = [
   "crates/proof/executor",
   "crates/proof/preimage",
   "crates/proof/primitives",
-  "crates/proof/fpvm-precompiles",
   "crates/proof/host",
-  "crates/proof/std-fpvm",
-  "crates/proof/std-fpvm-proc",
   "crates/proof/tee/nitro-host",
   "crates/proof/tee/nitro-enclave",
   "crates/proof/tee/registrar",
@@ -41,6 +38,17 @@ members = [
   "crates/proof/rpc",
   "crates/proof/proposer",
   "crates/proof/challenge",
+  "crates/proof/succinct/utils/client",
+  "crates/proof/succinct/utils/host",
+  "crates/proof/succinct/utils/build",
+  "crates/proof/succinct/utils/proof",
+  "crates/proof/succinct/utils/signer",
+  "crates/proof/succinct/utils/elfs",
+  "crates/proof/succinct/utils/ethereum/client",
+  "crates/proof/succinct/utils/ethereum/host",
+  "crates/proof/succinct/scripts/*",
+  "crates/proof/succinct/validity",
+
   "crates/utilities/*",
   "crates/batcher/*",
   "crates/builder/*",
@@ -150,7 +158,6 @@ base-bundles = { path = "crates/common/bundles" }
 base-common-signer = { path = "crates/common/signer" }
 base-common-chains = { path = "crates/common/chains" }
 base-common-network = { path = "crates/common/network" }
-base-common-provider = { path = "crates/common/provider" }
 base-access-lists = { path = "crates/common/access-lists" }
 base-common-rpc-types = { path = "crates/common/rpc-types" }
 base-common-flashblocks = { path = "crates/common/flashblocks" }
@@ -215,13 +222,13 @@ websocket-proxy = { path = "crates/infra/websocket-proxy" }
 mempool-rebroadcaster = { path = "crates/infra/mempool-rebroadcaster" }
 
 # Proof
-base-zk-db = { path = "crates/proof/zk/db" }
 base-proof-rpc = { path = "crates/proof/rpc" }
 base-proposer = { path = "crates/proof/proposer" }
 base-zk-client = { path = "crates/proof/zk/client" }
+base-zk-db = { path = "crates/proof/zk/db" }
 base-zk-outbox = { path = "crates/proof/zk/outbox" }
-base-challenger = { path = "crates/proof/challenge" }
 base-zk-service = { path = "crates/proof/zk/service" }
+base-challenger = { path = "crates/proof/challenge" }
 base-proof-contracts = { path = "crates/proof/contracts" }
 base-proof-tee-registrar = { path = "crates/proof/tee/registrar" }
 base-proof-tee-nitro-host = { path = "crates/proof/tee/nitro-host" }
@@ -234,11 +241,21 @@ base-proof-client = { path = "crates/proof/client", default-features = false }
 base-proof-driver = { path = "crates/proof/driver", default-features = false }
 base-proof-executor = { path = "crates/proof/executor", default-features = false }
 base-proof-preimage = { path = "crates/proof/preimage", default-features = false }
-base-proof-std-fpvm = { path = "crates/proof/std-fpvm", default-features = false }
 base-proof-primitives = { path = "crates/proof/primitives", default-features = false }
-base-proof-std-fpvm-proc = { path = "crates/proof/std-fpvm-proc", default-features = false }
 base-proof-tee-nitro-attestation-prover = { path = "crates/proof/tee/nitro-attestation-prover" }
-base-proof-fpvm-precompiles = { path = "crates/proof/fpvm-precompiles", default-features = false }
+
+# Succinct (OP Succinct / SP1 proving)
+base-proof-succinct-elfs = { path = "crates/proof/succinct/utils/elfs" }
+base-proof-succinct-prove = { path = "crates/proof/succinct/scripts/prove" }
+base-proof-succinct-scripts = { path = "crates/proof/succinct/scripts/utils" }
+base-proof-succinct-validity = { path = "crates/proof/succinct/validity" }
+base-proof-succinct-host-utils = { path = "crates/proof/succinct/utils/host" }
+base-proof-succinct-build-utils = { path = "crates/proof/succinct/utils/build" }
+base-proof-succinct-proof-utils = { path = "crates/proof/succinct/utils/proof" }
+base-proof-succinct-client-utils = { path = "crates/proof/succinct/utils/client" }
+base-proof-succinct-signer-utils = { path = "crates/proof/succinct/utils/signer" }
+base-proof-succinct-ethereum-host-utils = { path = "crates/proof/succinct/utils/ethereum/host" }
+base-proof-succinct-ethereum-client-utils = { path = "crates/proof/succinct/utils/ethereum/client" }
 
 # Actions
 base-action-harness = { path = "actions/harness" }
@@ -270,6 +287,7 @@ revm = { version = "34.0.0", default-features = false }
 revm-bytecode = { version = "8.0.0", default-features = false }
 revm-database = { version = "10.0.0", default-features = false }
 revm-inspectors = { version = "0.34.3", default-features = false }
+revm-precompile = { version = "32.0.0", default-features = false }
 revm-primitives = { version = "22.0.0", default-features = false }
 revm-context-interface = { version = "14.0.0", default-features = false }
 
@@ -286,6 +304,7 @@ alloy-rpc-types = "1.8"
 alloy-rpc-client = "1.8"
 alloy-hardforks = "0.4.5"
 alloy-sol-macro = "1.5.6"
+alloy-signer-gcp = "1.8"
 alloy-signer-local = "1.8"
 alloy-transport-ws = "1.8"
 alloy-node-bindings = "1.8"
@@ -302,6 +321,7 @@ alloy-consensus = { version = "1.8", default-features = false }
 alloy-sol-types = { version = "1.5.6", default-features = false }
 alloy-primitives = { version = "1.5.6", default-features = false }
 alloy-rpc-types-eth = { version = "1.8", default-features = false }
+alloy-rpc-types-trace = { version = "1.8", default-features = false }
 alloy-rpc-types-debug = { version = "1.8", default-features = false }
 alloy-rpc-types-engine = { version = "1.8", default-features = false }
 alloy-network-primitives = { version = "1.8", default-features = false }
@@ -393,8 +413,10 @@ async-trait = "0.1.83"
 # grpc
 prost = "0.14"
 tonic = "0.14"
+tonic-web = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
+tonic-reflection = "0.14"
 
 # rpc
 jsonrpsee = "0.26.0"
@@ -431,6 +453,16 @@ aws-sdk-elasticloadbalancingv2 = { version = "1.109.0", default-features = false
 boundless-market = "1.1"
 risc0-ethereum-contracts = "3.0.1"
 risc0-zkvm = { version = "^3.0", default-features = false }
+
+# SP1 v6.1.0 (Hypercube) — used by crates/proof/succinct
+sp1-sdk = { version = "=6.1.0" }
+sp1-lib = { version = "=6.1.0" }
+sp1-zkvm = { version = "=6.1.0" }
+sp1-build = "=6.1.0"
+sp1-prover-types = "=6.1.0"
+sp1-cluster-artifact = { git = "https://github.com/succinctlabs/sp1-cluster", tag = "v2.1.5" }
+sp1-cluster-common = { git = "https://github.com/succinctlabs/sp1-cluster", tag = "v2.1.5" }
+sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster", tag = "v2.1.5" }
 
 # crypto
 sha3 = "0.10"
@@ -485,8 +517,8 @@ similar-asserts = "1"
 proptest-arbitrary-interop = "0.1.0"
 arbitrary = { version = "1", default-features = false }
 wiremock = { version = "0.6.2", default-features = false }
-testcontainers = { version = "0.27", default-features = false }
-testcontainers-modules = { version = "0.15", default-features = false }
+testcontainers = { version = "0.25", default-features = false }
+testcontainers-modules = { version = "0.13", default-features = false }
 
 # misc
 snap = "1"
@@ -503,11 +535,14 @@ moka = "0.12"
 vsock = "0.5"
 uuid = "1.21"
 dirs = "6.0.0"
+csv = "1.3.0"
+log = "0.4.22"
 anyhow = "1.0"
 rayon = "1.11"
 nanoid = "0.4"
 tar = "0.4.44"
 backon = "1.6"
+dotenv = "0.15.0"
 time = "0.3.44"
 base64 = "0.22"
 rlimit = "0.11"
@@ -528,15 +563,24 @@ hex-literal = "1.1"
 auto_impl = "1.2.0"
 shellexpand = "3.1"
 dirs-next = "2.0.0"
+num-format = "0.4.4"
+serde_cbor = "0.11.2"
+lazy_static = "1.5.0"
+strum_macros = "0.28"
 ambassador = "0.4.2"
 miniz_oxide = "0.9.0"
 parking_lot = "0.12.3"
 opentelemetry = "0.31"
+cargo_metadata = "0.18.1"
 tracing-indicatif = "0.3"
 tikv-jemallocator = "0.6"
 concurrent-queue = "2.5.0"
 modular-bitfield = "0.13.1"
 crossbeam-channel = "0.5.13"
+tracing-opentelemetry = "0.32"
+opentelemetry-appender-tracing = "0.31.1"
+opentelemetry-otlp = { version = "0.31", default-features = false }
+opentelemetry_sdk = { version = "0.31", default-features = false }
 rand_08 = { package = "rand", version = "0.8" }
 zip = { version = "8.1", default-features = false }
 strum = { version = "0.27", default-features = false }
@@ -546,7 +590,9 @@ rocksdb = { version = "0.24", default-features = false }
 rdkafka = { version = "0.39", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 either = { version = "1.15.0", default-features = false }
+kzg-rs = { version = "0.2.8", default-features = false }
 dotenvy = { version = "0.15.7", default-features = false }
+opentelemetry-stdout = { version = "0.31", default-features = false }
 derive_more = { version = "2.1.0", default-features = false }
 figment = { version = "0.10.19", default-features = false }
 

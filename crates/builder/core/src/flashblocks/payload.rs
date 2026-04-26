@@ -12,8 +12,9 @@ use alloy_consensus::{
 use alloy_eips::{Encodable2718, eip7685::EMPTY_REQUESTS_HASH, merge::BEACON_NONCE};
 use alloy_evm::Database;
 use alloy_primitives::{Address, B256, Bloom, U256, logs_bloom, map::foldhash::HashMap};
-use base_access_lists::{FlashblockAccessList, FlashblockAccessListBuilder};
+use base_access_lists::FlashblockAccessList;
 use base_builder_publish::WebSocketPublisher;
+use base_bundles::RejectedTransaction;
 use base_common_chains::Upgrades;
 use base_common_consensus::{BaseReceipt, BaseTransactionSigned};
 use base_common_flashblocks::{
@@ -71,19 +72,6 @@ type NextBestFlashblocksTxs<Pool> = BestFlashblocksTxs<
     >,
 >;
 
-/// Execution information specific to flashblocks.
-///
-/// Tracks the last consumed flashblock index and manages the
-/// flashblock-level access list builder for progressive block construction.
-#[derive(Debug, Default, Clone)]
-pub struct FlashblocksExecutionInfo {
-    /// Index of the last consumed flashblock
-    pub(crate) last_flashblock_index: usize,
-
-    /// Flashblock-level access list builder
-    pub(crate) access_list_builder: FlashblockAccessListBuilder,
-}
-
 /// Base payload builder
 #[derive(Debug, Clone)]
 pub(super) struct BasePayloadBuilder<Pool, Client> {
@@ -101,6 +89,8 @@ pub(super) struct BasePayloadBuilder<Pool, Client> {
     pub ws_pub: Arc<WebSocketPublisher>,
     /// System configuration for the builder
     pub config: BuilderConfig,
+    /// Sender for forwarding per-block batches of rejected transactions to the audit-archiver.
+    pub rejected_tx_sender: Option<mpsc::Sender<Vec<RejectedTransaction>>>,
 }
 
 impl<Pool, Client> BasePayloadBuilder<Pool, Client> {
@@ -112,8 +102,9 @@ impl<Pool, Client> BasePayloadBuilder<Pool, Client> {
         config: BuilderConfig,
         payload_tx: mpsc::Sender<BaseBuiltPayload>,
         ws_pub: Arc<WebSocketPublisher>,
+        rejected_tx_sender: Option<mpsc::Sender<Vec<RejectedTransaction>>>,
     ) -> Self {
-        Self { evm_config, pool, client, payload_tx, ws_pub, config }
+        Self { evm_config, pool, client, payload_tx, ws_pub, config, rejected_tx_sender }
     }
 }
 
@@ -201,6 +192,7 @@ where
             cancel,
             extra,
             builder_config: self.config.clone(),
+            rejected_tx_sender: self.rejected_tx_sender.clone(),
         })
     }
 
@@ -832,6 +824,8 @@ where
 
         // Build the final block WITH state root computed
         let (final_payload, _) = build_block(state, ctx, info, true)?;
+
+        ctx.flush_rejected_txs(info);
 
         let elapsed = start_time.elapsed();
         info!(

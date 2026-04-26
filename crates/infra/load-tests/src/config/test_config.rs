@@ -2,7 +2,6 @@ use std::{fmt, path::Path, time::Duration};
 
 use alloy_primitives::Address;
 use alloy_signer_local::PrivateKeySigner;
-use rand::Rng;
 use revm::precompile::PrecompileId;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -109,6 +108,10 @@ pub struct TestConfig {
     pub target_gps: Option<u64>,
 
     /// Seed for deterministic account generation (used if mnemonic not provided).
+    ///
+    /// Defaults to `12345` for reproducible single-run testing and fund recovery. Concurrent runs
+    /// against the same chain without overriding this will derive identical
+    /// accounts and collide on nonces.
     pub seed: u64,
 
     /// Chain ID (if not provided, fetched from RPC).
@@ -135,14 +138,14 @@ impl Default for TestConfig {
             rpc: Url::parse("http://localhost:8545").expect("valid URL"),
             mnemonic: None,
             funding_amount: "10000000000000000".to_string(),
-            sender_count: 50,
+            sender_count: 100,
             sender_offset: 0,
-            in_flight_per_sender: 64,
-            batch_size: 20,
+            in_flight_per_sender: 256,
+            batch_size: 50,
             batch_timeout: Some("100ms".to_string()),
-            duration: Some("30s".to_string()),
-            target_gps: Some(10_000_000),
-            seed: rand::rng().random(),
+            duration: Some("60s".to_string()),
+            target_gps: Some(20_000_000),
+            seed: 12345,
             chain_id: None,
             transactions: vec![WeightedTxType { weight: 100, tx_type: TxTypeConfig::Transfer }],
             looper_contract: None,
@@ -442,7 +445,7 @@ rpc: http://localhost:8545
 "#;
         let config = TestConfig::from_yaml(yaml).unwrap();
         assert_eq!(config.rpc.host_str(), Some("localhost"));
-        assert_eq!(config.sender_count, 50);
+        assert_eq!(config.sender_count, 100);
         assert!(config.mnemonic.is_none());
     }
 
