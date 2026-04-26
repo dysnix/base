@@ -26,8 +26,13 @@ base-common-genesis = { workspace = true, features = ["std"] }
 clap = { workspace = true, features = ["derive"], optional = true }
 
 [dev-dependencies]
+criterion.workspace = true
 rstest.workspace = true
 alloy-consensus = { workspace = true, features = ["std"] }
+
+[[bench]]
+name = "da_backlog"
+harness = false
 
 [features]
 clap = [ "dep:clap" ]

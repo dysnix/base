@@ -2892,6 +2892,7 @@ dependencies = [
  "base-metrics",
  "base-protocol",
  "clap",
+ "criterion",
  "metrics",
  "rand 0.9.4",
  "rstest",
