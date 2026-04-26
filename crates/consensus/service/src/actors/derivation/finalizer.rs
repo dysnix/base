@@ -61,11 +61,26 @@ impl L2Finalizer {
         // queue of all L1 blocks not contained in the finalized L1 chain.
         if let Some((_, highest_safe_number)) = highest_safe {
             let result = *highest_safe_number;
-            self.awaiting_finalization.retain(|&number, _| number > new_finalized_l1_block.number);
+            self.awaiting_finalization = Self::future_entries(
+                &mut self.awaiting_finalization,
+                new_finalized_l1_block.number,
+            );
             Some(result)
         } else {
             None
         }
+    }
+
+    fn future_entries(
+        awaiting_finalization: &mut BTreeMap<L1BlockNumber, L2BlockNumber>,
+        finalized_l1_number: L1BlockNumber,
+    ) -> BTreeMap<L1BlockNumber, L2BlockNumber> {
+        if finalized_l1_number == L1BlockNumber::MAX {
+            awaiting_finalization.clear();
+            return BTreeMap::new();
+        }
+
+        awaiting_finalization.split_off(&(finalized_l1_number + 1))
     }
 }
 
@@ -178,5 +193,14 @@ mod tests {
         assert_eq!(f.try_finalize_next(l1_at(5)), Some(20));
         // Queue is now empty; an older signal cannot regress to a stale entry.
         assert!(f.try_finalize_next(l1_at(2)).is_none());
+    }
+
+    #[test]
+    fn max_l1_finalization_drains_without_overflow() {
+        let mut f = L2Finalizer::default();
+        f.enqueue_for_finalization(&attrs(0, u64::MAX));
+
+        assert_eq!(f.try_finalize_next(l1_at(u64::MAX)), Some(1));
+        assert!(f.try_finalize_next(l1_at(u64::MAX)).is_none());
     }
 }

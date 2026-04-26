@@ -3713,6 +3713,7 @@ dependencies = [
  "base-metrics",
  "base-protocol",
  "bytes",
+ "criterion",
  "derive_more 2.1.1",
  "discv5",
  "futures",
