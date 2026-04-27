@@ -270,3 +270,24 @@ Results:
 - focused validation passed again: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
 Next:
 - if this startup-scan path is revisited again, extend the readiness matrix again (for example front-loaded, back-loaded, and mixed completion ratios) to map the crossover between incremental decode cost and touched-only drain savings before attempting any further production optimization
+
+## 2026-04-27 18:19 UTC
+Focus: `base-batcher-service` recent-tx startup scan weighted readiness benchmark coverage.
+Hypothesis: the prior delayed/staggered multi-block fixtures showed touched-only draining still wins when readiness is distributed across blocks, but they did not distinguish whether the win is stronger when channels complete early versus late; adding front-loaded and back-loaded readiness matrices should make that crossover explicit before any further production optimization.
+Commands:
+- `cargo bench -p base-batcher-service --bench recent_txs process_blocks_staggered_ready -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- extended `crates/batcher/service/benches/recent_txs.rs` with `multi_block_weighted_ready_tx_payloads`, front-loaded/back-loaded readiness distributions, and a new `process_blocks_weighted_ready` Criterion group
+- `cargo fmt --all`
+- `cargo bench -p base-batcher-service --bench recent_txs process_blocks_weighted_ready -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- `cargo test -p base-batcher-service recent_txs -- --nocapture`
+- `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+Results:
+- refreshed the even staggered-ready baseline before editing the bench file: `baseline_vec_scan_all_4_blocks_1024_channels_ready_in_quarters` = `2.2775 ms .. 2.3121 ms`, `fresh_tracker_4_blocks_1024_channels_ready_in_quarters` = `2.1231 ms .. 2.1526 ms`, and `reused_tracker_4_blocks_1024_channels_ready_in_quarters` = `2.1196 ms .. 2.1639 ms`, confirming the touched-only path still holds an about `6.8%` win when completions are evenly distributed
+- added benchmark-only weighted readiness coverage where `1024` channels complete across four blocks in front-loaded (`512/256/128/128`) and back-loaded (`128/128/256/512`) distributions, keeping production logic unchanged
+- the new weighted harness shows touched-only draining helps in both shapes, with a larger gain when completion is back-loaded:
+  - front-loaded: `baseline_vec_scan_all_front_loaded_4_blocks_1024_channels` = `2.1548 ms .. 2.1787 ms`, `fresh_tracker_front_loaded_4_blocks_1024_channels` = `2.0488 ms .. 2.0856 ms` (~`4.7%` lower median), `reused_tracker_front_loaded_4_blocks_1024_channels` = `2.0433 ms .. 2.0741 ms` (~`4.8%` lower median)
+  - back-loaded: `baseline_vec_scan_all_back_loaded_4_blocks_1024_channels` = `2.4837 ms .. 2.5261 ms`, `fresh_tracker_back_loaded_4_blocks_1024_channels` = `2.2126 ms .. 2.2628 ms` (~`10.6%` lower median), `reused_tracker_back_loaded_4_blocks_1024_channels` = `2.2077 ms .. 2.2229 ms` (~`11.5%` lower median)
+- this makes the crossover clearer: touched-only draining buys more once a larger survivor-heavy channel set persists into later blocks, while tracker reuse remains effectively tied with fresh allocation and at most a small secondary factor
+- focused validation passed again: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+Next:
+- if this startup-scan path is revisited again, add a mixed readiness matrix with uneven per-block touch counts (not just completion counts) so the next experiment can separate savings from survivor-heavy draining versus savings from fewer per-block frame parses

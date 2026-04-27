@@ -25,6 +25,9 @@ const READY_TRANSITION_BLOCK_COUNT: usize = 4;
 const READY_TRANSITION_CHANNEL_COUNT: usize = 1_024;
 const STAGGERED_READY_BLOCK_COUNT: usize = 4;
 const STAGGERED_READY_CHANNEL_COUNT: usize = 1_024;
+const FRONT_LOADED_READY_CHANNEL_COUNTS: [usize; STAGGERED_READY_BLOCK_COUNT] =
+    [512, 256, 128, 128];
+const BACK_LOADED_READY_CHANNEL_COUNTS: [usize; STAGGERED_READY_BLOCK_COUNT] = [128, 128, 256, 512];
 
 fn test_rollup_config() -> RollupConfig {
     RollupConfig {
@@ -260,6 +263,43 @@ fn multi_block_staggered_ready_tx_payloads(
             }]));
         }
     }
+
+    block_tx_payloads
+}
+
+fn multi_block_weighted_ready_tx_payloads(ready_channel_counts: &[usize]) -> Vec<Vec<Vec<u8>>> {
+    let block_count = ready_channel_counts.len();
+    let mut block_tx_payloads: Vec<Vec<Vec<u8>>> = ready_channel_counts
+        .iter()
+        .map(|channel_count| Vec::with_capacity(*channel_count))
+        .collect();
+
+    let mut channel_index = 0usize;
+    for (ready_block, ready_channel_count) in ready_channel_counts.iter().copied().enumerate() {
+        for _ in 0..ready_channel_count {
+            let channel_id = channel_id(channel_index);
+            let encoded_batch = encode_single_batch(&SingleBatch {
+                timestamp: 1_010 + channel_index as u64 * 2,
+                ..Default::default()
+            });
+            for (block_index, frame_data) in
+                split_frame_data_across_blocks(&encoded_batch, ready_block + 1)
+                    .into_iter()
+                    .enumerate()
+            {
+                block_tx_payloads[block_index].push(encode_tx_frames_payload(&[Frame {
+                    id: channel_id,
+                    number: block_index as u16,
+                    data: frame_data,
+                    is_last: block_index == ready_block,
+                }]));
+            }
+            channel_index += 1;
+        }
+    }
+
+    debug_assert_eq!(channel_index, ready_channel_counts.iter().sum::<usize>());
+    debug_assert_eq!(block_tx_payloads.len(), block_count);
 
     block_tx_payloads
 }
@@ -965,6 +1005,105 @@ fn bench_recent_tx_process_blocks_staggered_ready(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_recent_tx_process_blocks_weighted_ready(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batcher_service/recent_txs/process_blocks_weighted_ready");
+    group.sample_size(15);
+
+    let rollup_config = test_rollup_config();
+    let front_loaded_block_tx_payloads =
+        multi_block_weighted_ready_tx_payloads(&FRONT_LOADED_READY_CHANNEL_COUNTS);
+    let back_loaded_block_tx_payloads =
+        multi_block_weighted_ready_tx_payloads(&BACK_LOADED_READY_CHANNEL_COUNTS);
+
+    group.bench_function("baseline_vec_scan_all_front_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_vec_tracking_and_full_scan(
+                    black_box(&mut channels),
+                    black_box(&front_loaded_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("fresh_tracker_front_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_fresh_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&front_loaded_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("reused_tracker_front_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&front_loaded_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("baseline_vec_scan_all_back_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_vec_tracking_and_full_scan(
+                    black_box(&mut channels),
+                    black_box(&back_loaded_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("fresh_tracker_back_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_fresh_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&back_loaded_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("reused_tracker_back_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&back_loaded_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_recent_tx_ready_channel_lookup,
@@ -974,5 +1113,6 @@ criterion_group!(
     bench_recent_tx_process_blocks,
     bench_recent_tx_process_blocks_ready_transition,
     bench_recent_tx_process_blocks_staggered_ready,
+    bench_recent_tx_process_blocks_weighted_ready,
 );
 criterion_main!(benches);
