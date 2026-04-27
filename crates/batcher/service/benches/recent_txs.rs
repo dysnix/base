@@ -5,13 +5,15 @@ use std::hint::black_box;
 use alloy_eips::eip1898::BlockNumHash;
 use alloy_primitives::B256;
 use alloy_rlp::Encodable;
-use base_batcher_service::RecentTxScanner;
+use base_batcher_service::{RecentTxScanner, TouchedChannelTracker};
 use base_common_genesis::{ChainGenesis, RollupConfig};
 use base_protocol::{Batch, BlockInfo, Channel, ChannelId, Frame, SingleBatch};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 const READY_CHANNEL_COUNT: usize = 4_096;
 const SPARSE_TOUCHED_CHANNEL_COUNT: usize = 64;
+const DUPLICATE_FANOUT_FRAME_COUNT: usize = 4_096;
+const DUPLICATE_FANOUT_UNIQUE_CHANNEL_COUNT: usize = 512;
 
 fn test_rollup_config() -> RollupConfig {
     RollupConfig {
@@ -70,7 +72,8 @@ fn channel_id(seed: usize) -> ChannelId {
 fn mixed_channel_map() -> std::collections::HashMap<ChannelId, Channel> {
     let mut channels = std::collections::HashMap::with_capacity(READY_CHANNEL_COUNT * 2);
     for index in 0..READY_CHANNEL_COUNT {
-        channels.insert(channel_id(index), ready_channel(channel_id(index), 1_010 + index as u64 * 2));
+        channels
+            .insert(channel_id(index), ready_channel(channel_id(index), 1_010 + index as u64 * 2));
         channels.insert(
             channel_id(index + READY_CHANNEL_COUNT),
             incomplete_channel(channel_id(index + READY_CHANNEL_COUNT)),
@@ -90,7 +93,8 @@ fn incomplete_channel_map() -> std::collections::HashMap<ChannelId, Channel> {
 fn sparse_ready_channel_map() -> std::collections::HashMap<ChannelId, Channel> {
     let mut channels = std::collections::HashMap::with_capacity(READY_CHANNEL_COUNT * 2);
     for index in 0..SPARSE_TOUCHED_CHANNEL_COUNT {
-        channels.insert(channel_id(index), ready_channel(channel_id(index), 1_010 + index as u64 * 2));
+        channels
+            .insert(channel_id(index), ready_channel(channel_id(index), 1_010 + index as u64 * 2));
     }
     for index in SPARSE_TOUCHED_CHANNEL_COUNT..READY_CHANNEL_COUNT * 2 {
         channels.insert(channel_id(index), incomplete_channel(channel_id(index)));
@@ -108,6 +112,34 @@ fn touched_incomplete_ids() -> Vec<ChannelId> {
 
 fn touched_sparse_ids() -> Vec<ChannelId> {
     (0..SPARSE_TOUCHED_CHANNEL_COUNT).map(channel_id).collect()
+}
+
+fn unique_frame_channel_ids() -> Vec<ChannelId> {
+    (0..READY_CHANNEL_COUNT).map(channel_id).collect()
+}
+
+fn duplicate_fanout_frame_channel_ids() -> Vec<ChannelId> {
+    (0..DUPLICATE_FANOUT_FRAME_COUNT)
+        .map(|index| channel_id(index % DUPLICATE_FANOUT_UNIQUE_CHANNEL_COUNT))
+        .collect()
+}
+
+fn track_touched_channel_ids_with_vec(frame_channel_ids: &[ChannelId]) -> Vec<ChannelId> {
+    let mut touched_channel_ids = Vec::with_capacity(frame_channel_ids.len());
+    for channel_id in frame_channel_ids {
+        if !touched_channel_ids.contains(channel_id) {
+            touched_channel_ids.push(*channel_id);
+        }
+    }
+    touched_channel_ids
+}
+
+fn track_touched_channel_ids_with_tracker(frame_channel_ids: &[ChannelId]) -> Vec<ChannelId> {
+    let mut tracker = TouchedChannelTracker::with_capacity(frame_channel_ids.len());
+    for channel_id in frame_channel_ids {
+        tracker.record(*channel_id);
+    }
+    tracker.touched_channel_ids().to_vec()
 }
 
 fn bench_recent_tx_drain_ready_channels(c: &mut Criterion) {
@@ -223,25 +255,22 @@ fn bench_recent_tx_drain_ready_channels(c: &mut Criterion) {
         );
     });
 
-    group.bench_function(
-        "baseline_scan_all_with_64_touched_incomplete_among_8192_channels",
-        |b| {
-            b.iter_batched(
-                incomplete_channel_map,
-                |mut channels| {
-                    let mut highest = None;
-                    RecentTxScanner::drain_all_ready_channels(
-                        black_box(&mut channels),
-                        black_box(0),
-                        black_box(&rollup_config),
-                        black_box(&mut highest),
-                    );
-                    black_box((channels, highest));
-                },
-                BatchSize::SmallInput,
-            );
-        },
-    );
+    group.bench_function("baseline_scan_all_with_64_touched_incomplete_among_8192_channels", |b| {
+        b.iter_batched(
+            incomplete_channel_map,
+            |mut channels| {
+                let mut highest = None;
+                RecentTxScanner::drain_all_ready_channels(
+                    black_box(&mut channels),
+                    black_box(0),
+                    black_box(&rollup_config),
+                    black_box(&mut highest),
+                );
+                black_box((channels, highest));
+            },
+            BatchSize::SmallInput,
+        );
+    });
 
     group.bench_function("64_touched_incomplete_among_8192_channels", |b| {
         b.iter_batched(
@@ -264,5 +293,38 @@ fn bench_recent_tx_drain_ready_channels(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_recent_tx_drain_ready_channels);
+fn bench_recent_tx_track_touched_channel_ids(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batcher_service/recent_txs/track_touched_channel_ids");
+    group.sample_size(20);
+
+    let unique_frame_ids = unique_frame_channel_ids();
+    group.bench_function("baseline_vec_scan_4096_unique_frame_channel_ids", |b| {
+        b.iter(|| black_box(track_touched_channel_ids_with_vec(black_box(&unique_frame_ids))));
+    });
+    group.bench_function("hashset_tracker_4096_unique_frame_channel_ids", |b| {
+        b.iter(|| black_box(track_touched_channel_ids_with_tracker(black_box(&unique_frame_ids))));
+    });
+
+    let duplicate_fanout_frame_ids = duplicate_fanout_frame_channel_ids();
+    group.bench_function("baseline_vec_scan_4096_frames_across_512_unique_channel_ids", |b| {
+        b.iter(|| {
+            black_box(track_touched_channel_ids_with_vec(black_box(&duplicate_fanout_frame_ids)))
+        });
+    });
+    group.bench_function("hashset_tracker_4096_frames_across_512_unique_channel_ids", |b| {
+        b.iter(|| {
+            black_box(track_touched_channel_ids_with_tracker(black_box(
+                &duplicate_fanout_frame_ids,
+            )))
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_recent_tx_drain_ready_channels,
+    bench_recent_tx_track_touched_channel_ids,
+);
 criterion_main!(benches);

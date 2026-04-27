@@ -109,3 +109,29 @@ Results:
   - `64_touched_incomplete_among_8192_channels`: `366.17 µs .. 382.39 µs` (~8-10% lower in the sparse no-decode case, matching the intended avoided-scan scenario)
 Next:
 - if this path is revisited, grow the benchmark matrix around frame fan-out and touched-ID cardinality so the crossover point between touched-only draining and full-map scanning is explicit, especially for startup scans with many buffered but mostly untouched channels
+
+## 2026-04-27 03:21 UTC
+Focus: `base-batcher-service` touched-channel deduplication inside `RecentTxScanner::highest_submitted_l2_block()`.
+Hypothesis: after moving the startup scan to touched-only draining, per-block deduplication via `Vec::contains` is still O(k²) in the number of parsed frames; replacing it with a small reusable tracker backed by `HashSet` + ordered `Vec` should materially reduce the bookkeeping cost for high fan-out blocks without changing drain semantics.
+Commands:
+- `cargo bench -p base-batcher-service --bench recent_txs -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- edited `crates/batcher/service/src/recent_txs.rs` to add `TouchedChannelTracker` and use it from `highest_submitted_l2_block()`
+- extended `crates/batcher/service/benches/recent_txs.rs` with comparative touched-ID tracking microbenches for the old `Vec::contains` path vs. the new tracker
+- `cargo fmt --all`
+- `cargo test -p base-batcher-service recent_txs -- --nocapture`
+- `cargo bench -p base-batcher-service --bench recent_txs -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+Results:
+- added a public `TouchedChannelTracker` type, re-exported from `lib.rs`, that preserves first-seen channel order while deduplicating in O(1)-average membership checks via `HashSet`
+- switched `highest_submitted_l2_block()` from ad hoc `Vec::contains` deduplication to `TouchedChannelTracker::record`, keeping the touched-only drain API unchanged
+- added `touched_channel_tracker_deduplicates_and_preserves_first_seen_order` to lock in ordering and dedup behavior alongside the existing drain regression test
+- added focused Criterion coverage that compares the old vector scan against the new tracker for `4096` unique touched IDs and `4096` frames spread across `512` unique channel IDs
+- validation passed: focused tests `7 passed`; `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings` passed
+- touched-ID tracking benchmark results after the change:
+  - `baseline_vec_scan_4096_unique_frame_channel_ids`: `1.9804 ms .. 2.0371 ms`
+  - `hashset_tracker_4096_unique_frame_channel_ids`: `46.993 µs .. 47.127 µs` (~42x lower)
+  - `baseline_vec_scan_4096_frames_across_512_unique_channel_ids`: `272.70 µs .. 278.45 µs`
+  - `hashset_tracker_4096_frames_across_512_unique_channel_ids`: `43.241 µs .. 43.367 µs` (~6.3x lower)
+- existing drain-path benches stayed in the same rough bands as the prior run, so this iteration primarily improved per-block touched-ID bookkeeping rather than decode-heavy channel draining
+Next:
+- if startup scan latency is revisited again, add an end-to-end block-parsing bench that combines frame parsing, touched-ID tracking, and touched-only draining so the next iteration can quantify where bookkeeping stops mattering relative to channel decode cost

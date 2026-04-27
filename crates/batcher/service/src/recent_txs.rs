@@ -1,6 +1,6 @@
 //! Startup scan of recent L1 blocks for submitted batcher frames.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use alloy_primitives::Address;
 use alloy_provider::{Provider, RootProvider};
@@ -20,6 +20,35 @@ pub const MAX_CHECK_RECENT_TXS_DEPTH: u64 = 128;
 /// Bounds peak memory to roughly this many full L1 blocks while still
 /// achieving significant speedup over sequential fetching.
 pub const SCAN_FETCH_CONCURRENCY: usize = 16;
+
+/// Tracks the unique channel IDs touched while scanning a single L1 block.
+#[derive(Debug, Default)]
+pub struct TouchedChannelTracker {
+    touched_channel_ids: Vec<ChannelId>,
+    seen_channel_ids: HashSet<ChannelId>,
+}
+
+impl TouchedChannelTracker {
+    /// Creates a tracker sized for roughly `capacity` recorded frame touches.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            touched_channel_ids: Vec::with_capacity(capacity),
+            seen_channel_ids: HashSet::with_capacity(capacity),
+        }
+    }
+
+    /// Records a touched channel ID the first time it appears in the current block.
+    pub fn record(&mut self, channel_id: ChannelId) {
+        if self.seen_channel_ids.insert(channel_id) {
+            self.touched_channel_ids.push(channel_id);
+        }
+    }
+
+    /// Returns the touched channel IDs in first-seen order.
+    pub fn touched_channel_ids(&self) -> &[ChannelId] {
+        &self.touched_channel_ids
+    }
+}
 
 /// Scans recent L1 blocks on startup to find the highest submitted L2 block.
 ///
@@ -106,7 +135,8 @@ impl RecentTxScanner {
                 timestamp: block.header.inner.timestamp,
             };
 
-            let mut touched_channel_ids = Vec::new();
+            let mut touched_channel_ids =
+                TouchedChannelTracker::with_capacity(block.transactions.len());
             for tx in block.transactions.txns() {
                 if tx.inner.signer() != batcher_address {
                     continue;
@@ -123,9 +153,7 @@ impl RecentTxScanner {
                 };
 
                 for frame in frames {
-                    if !touched_channel_ids.contains(&frame.id) {
-                        touched_channel_ids.push(frame.id);
-                    }
+                    touched_channel_ids.record(frame.id);
                     let channel = channels
                         .entry(frame.id)
                         .or_insert_with(|| Channel::new(frame.id, block_info));
@@ -137,7 +165,7 @@ impl RecentTxScanner {
 
             Self::drain_ready_channels(
                 &mut channels,
-                &touched_channel_ids,
+                touched_channel_ids.touched_channel_ids(),
                 block_info.timestamp,
                 rollup_config,
                 &mut highest_l2,
@@ -228,7 +256,7 @@ mod tests {
     use base_common_genesis::{ChainGenesis, RollupConfig};
     use base_protocol::{Batch, BlockInfo, Channel, ChannelId, Frame, SingleBatch};
 
-    use super::RecentTxScanner;
+    use super::{RecentTxScanner, TouchedChannelTracker};
 
     /// Build a [`RollupConfig`] with controllable genesis parameters for tests.
     fn test_rollup_config(
@@ -395,8 +423,10 @@ mod tests {
             )
             .expect("frame must be accepted");
 
-        let mut channels =
-            HashMap::from([(untouched_ready_id, ready_channel), (touched_incomplete_id, touched_incomplete)]);
+        let mut channels = HashMap::from([
+            (untouched_ready_id, ready_channel),
+            (touched_incomplete_id, touched_incomplete),
+        ]);
         let mut highest = None;
 
         RecentTxScanner::drain_ready_channels(
@@ -430,5 +460,21 @@ mod tests {
             !channels.contains_key(&untouched_ready_id),
             "touched ready channels must be drained once decoded"
         );
+    }
+
+    #[test]
+    fn touched_channel_tracker_deduplicates_and_preserves_first_seen_order() {
+        let channel_id_a: ChannelId = [1u8; 16];
+        let channel_id_b: ChannelId = [2u8; 16];
+        let channel_id_c: ChannelId = [3u8; 16];
+        let mut tracker = TouchedChannelTracker::with_capacity(6);
+
+        tracker.record(channel_id_b);
+        tracker.record(channel_id_a);
+        tracker.record(channel_id_b);
+        tracker.record(channel_id_c);
+        tracker.record(channel_id_a);
+
+        assert_eq!(tracker.touched_channel_ids(), &[channel_id_b, channel_id_a, channel_id_c]);
     }
 }
