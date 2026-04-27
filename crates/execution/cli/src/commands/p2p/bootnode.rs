@@ -23,9 +23,9 @@ pub struct Command {
 
     /// Secret key to use for the bootnode.
     ///
-    /// This will also deterministically set the peer ID.  
-    /// If a path is provided but no key exists at that path,  
-    /// a new random secret will be generated and stored there.  
+    /// This will also deterministically set the peer ID.
+    /// If a path is provided but no key exists at that path,
+    /// a new random secret will be generated and stored there.
     /// If no path is specified, a new ephemeral random secret will be used.
     #[arg(long, value_name = "PATH")]
     pub p2p_secret_key: Option<PathBuf>,
@@ -47,7 +47,7 @@ impl Command {
         let sk = self.network_secret()?;
         let local_enr = NodeRecord::from_secret_key(self.addr, &sk);
 
-        let config = Discv4Config::builder().external_ip_resolver(Some(self.nat)).build();
+        let config = Discv4Config::builder().external_ip_resolver(Some(self.nat.clone())).build();
 
         let (_discv4, mut discv4_service) = Discv4::bind(self.addr, local_enr, sk, config).await?;
 
@@ -60,6 +60,11 @@ impl Command {
 
         if self.v5 {
             info!("Starting discv5");
+            let external_addr = self.nat.external_addr().await;
+            let mut amended_external_addr = self.addr.clone();
+            if let Some(external_addr) = external_addr {
+                amended_external_addr.set_ip(external_addr);
+            }
             let mut inner_builder = reth_discv5::discv5::ConfigBuilder::new(
                 reth_discv5::DEFAULT_DISCOVERY_V5_LISTEN_CONFIG,
             );
@@ -67,7 +72,8 @@ impl Command {
                 protocol_id: BASE_PROTOCOL_ID,
                 ..Default::default()
             });
-            let config = Config::builder(self.addr).discv5_config(inner_builder.build()).build();
+            let config =
+                Config::builder(amended_external_addr).discv5_config(inner_builder.build()).build();
             let (_discv5, updates) = Discv5::start(&sk, config).await?;
             discv5_updates = Some(updates);
         };
