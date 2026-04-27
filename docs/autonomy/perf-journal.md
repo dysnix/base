@@ -228,3 +228,24 @@ Results:
 - focused validation passed again: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
 Next:
 - if this startup-scan path is revisited again, extend the multi-block harness with channels that become ready only on later blocks so the benchmark covers both tracker reuse and the eventual decode/drain transition inside a persistent survivor-heavy channel set
+
+## 2026-04-27 14:07 UTC
+Focus: `base-batcher-service` recent-tx startup scan delayed-ready multi-block benchmark coverage.
+Hypothesis: the prior multi-block harness only measured incomplete survivor-heavy channels, so it still underrepresented the moment when touched channels finally become ready and trigger decode/drain work; a delayed-ready multi-block fixture should better capture the durable benefit of touched-only draining once channels finish on a later block.
+Commands:
+- `cargo bench -p base-batcher-service --bench recent_txs process_blocks -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- extended `crates/batcher/service/benches/recent_txs.rs` with `split_frame_data_across_blocks`, `multi_block_ready_transition_tx_payloads`, `process_blocks_with_vec_tracking_and_full_scan`, and a new `process_blocks_ready_transition` Criterion group
+- `cargo fmt --all`
+- `cargo bench -p base-batcher-service --bench recent_txs process_blocks_ready_transition -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- `cargo test -p base-batcher-service recent_txs -- --nocapture`
+- `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+Results:
+- the pre-change check confirmed the earlier incomplete-only `process_blocks` harness still does not show a durable tracker-reuse win on this machine (`fresh_tracker_8_blocks_4096_incomplete_touches_each_among_persistent_channels`: `3.4449 ms .. 3.7434 ms`; `reused_tracker_8_blocks_4096_incomplete_touches_each_among_persistent_channels`: `3.8477 ms .. 4.3095 ms`)
+- added benchmark-only delayed-ready coverage where `1024` channels receive four split frames across four synthetic blocks and only become ready on the final block, keeping production logic unchanged
+- the new delayed-ready harness showed the touched-only path still materially beats the old full-map drain once readiness and decode happen later in a persistent channel set:
+  - `baseline_vec_scan_all_4_blocks_1024_channels_ready_on_final_block`: `2.6940 ms .. 2.7362 ms`
+  - `fresh_tracker_4_blocks_1024_channels_ready_on_final_block`: `2.3213 ms .. 2.3388 ms` (~14.1% lower median)
+  - `reused_tracker_4_blocks_1024_channels_ready_on_final_block`: `2.3446 ms .. 2.3634 ms` (~12.8% lower median, slightly slower than fresh allocation in this shape)
+- focused validation passed again: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+Next:
+- if this path is revisited again, vary the delayed-ready matrix (for example channel count, block count, and percentage of channels completing on each block) so the crossover between decode cost, touched-only draining, and tracker reuse is explicit before attempting another production optimization
