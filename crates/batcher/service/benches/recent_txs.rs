@@ -1226,6 +1226,114 @@ fn bench_recent_tx_process_blocks_mixed_ready(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_recent_tx_process_blocks_touch_start_sparsity(c: &mut Criterion) {
+    let mut group =
+        c.benchmark_group("batcher_service/recent_txs/process_blocks_touch_start_sparsity");
+    group.sample_size(15);
+
+    let rollup_config = test_rollup_config();
+    let dense_start_block_tx_payloads =
+        multi_block_weighted_ready_tx_payloads(&BACK_LOADED_READY_CHANNEL_COUNTS);
+    let sparse_start_block_tx_payloads = multi_block_cohort_ready_tx_payloads(
+        MIXED_READY_BLOCK_COUNT,
+        &MIXED_BACK_LOADED_READY_COHORTS,
+    );
+
+    group.bench_function(
+        "baseline_vec_scan_all_dense_start_back_loaded_4_blocks_1024_channels",
+        |b| {
+            b.iter_batched(
+                HashMap::new,
+                |mut channels| {
+                    black_box(process_blocks_with_vec_tracking_and_full_scan(
+                        black_box(&mut channels),
+                        black_box(&dense_start_block_tx_payloads),
+                        black_box(&rollup_config),
+                    ));
+                    black_box(channels)
+                },
+                BatchSize::SmallInput,
+            );
+        },
+    );
+    group.bench_function("fresh_tracker_dense_start_back_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_fresh_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&dense_start_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("reused_tracker_dense_start_back_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&dense_start_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function(
+        "baseline_vec_scan_all_sparse_start_back_loaded_4_blocks_1024_channels",
+        |b| {
+            b.iter_batched(
+                HashMap::new,
+                |mut channels| {
+                    black_box(process_blocks_with_vec_tracking_and_full_scan(
+                        black_box(&mut channels),
+                        black_box(&sparse_start_block_tx_payloads),
+                        black_box(&rollup_config),
+                    ));
+                    black_box(channels)
+                },
+                BatchSize::SmallInput,
+            );
+        },
+    );
+    group.bench_function("fresh_tracker_sparse_start_back_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_fresh_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&sparse_start_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("reused_tracker_sparse_start_back_loaded_4_blocks_1024_channels", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&sparse_start_block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_recent_tx_ready_channel_lookup,
@@ -1237,5 +1345,6 @@ criterion_group!(
     bench_recent_tx_process_blocks_staggered_ready,
     bench_recent_tx_process_blocks_weighted_ready,
     bench_recent_tx_process_blocks_mixed_ready,
+    bench_recent_tx_process_blocks_touch_start_sparsity,
 );
 criterion_main!(benches);

@@ -310,3 +310,23 @@ Results:
 - focused validation passed again: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
 Next:
 - if this startup-scan path is revisited again, add another mixed fixture that holds completion timing constant while varying only touch-start sparsity, so the next experiment can quantify how much of the win comes from survivor-heavy buffered maps versus per-block frame parsing volume
+
+## 2026-04-27 22:31 UTC
+Focus: `base-batcher-service` recent-tx startup scan touch-start sparsity benchmark coverage.
+Hypothesis: the new mixed readiness fixture suggested part of the touched-only drain win comes from survivor-heavy buffered channels, but it still did not compare that against a dense-start shape with similar back-loaded completion; adding a paired dense-start vs sparse-start benchmark should isolate how much of the win comes from later touch-start sparsity versus long-lived survivor-heavy channels.
+Commands:
+- `cargo bench -p base-batcher-service --bench recent_txs process_blocks_weighted_ready -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- `cargo bench -p base-batcher-service --bench recent_txs process_blocks_mixed_ready -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- extended `crates/batcher/service/benches/recent_txs.rs` with a new `process_blocks_touch_start_sparsity` Criterion group that runs paired dense-start and sparse-start back-loaded fixtures
+- `cargo fmt --all`
+- `cargo bench -p base-batcher-service --bench recent_txs process_blocks_touch_start_sparsity -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- `cargo test -p base-batcher-service recent_txs -- --nocapture`
+- `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+Results:
+- refreshed the existing baselines before editing the bench file: weighted back-loaded median `2.4868 ms` baseline vs `2.2218 ms` fresh tracker (~`10.7%` lower) vs `2.1999 ms` reused tracker (~`11.5%` lower); mixed sparse-start median `2.2125 ms` baseline vs `2.0913 ms` fresh tracker (~`5.5%` lower) vs `2.0833 ms` reused tracker (~`5.8%` lower)
+- added benchmark-only paired coverage that keeps the same approximate back-loaded completion shape (`128/128/256/512`) but compares a dense-start fixture where every channel begins on block 0 against the existing sparse-start cohort fixture where later channels only appear on later blocks
+- the new pairwise comparison makes the survivor-heavy contribution explicit: dense-start baseline `2.4536 ms` vs sparse-start baseline `2.2503 ms` (~`8.3%` lower just from later touch-start sparsity), while the touched-only path still improves both shapes but wins more on dense-start survivor-heavy blocks: dense-start fresh tracker `2.2463 ms` (~`8.4%` lower) and reused tracker `2.2340 ms` (~`9.0%` lower) versus sparse-start fresh tracker `2.1074 ms` (~`6.4%` lower) and reused tracker `2.1106 ms` (~`6.2%` lower)
+- this narrows the interpretation: a meaningful part of the startup-scan gain comes from avoiding scans over channels that have existed since early blocks, while later touch-start sparsity alone already removes a large slice of the old full-scan cost
+- focused validation passed again: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+Next:
+- if this startup-scan path is revisited again, add a third pair where dense-start and sparse-start fixtures keep both completion counts and per-block transaction counts even closer so the remaining gap can be attributed almost entirely to survivor-heavy channel-map size rather than total parse volume
