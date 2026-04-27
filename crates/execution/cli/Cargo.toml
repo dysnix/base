@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+alloy-primitives.workspace = true
 reth-cli.workspace = true
 reth-discv4.workspace = true
 reth-discv5.workspace = true

@@ -2,11 +2,18 @@
 
 use std::{net::SocketAddr, path::PathBuf};
 
+use alloy_primitives::Bytes;
 use base_node_core::BASE_PROTOCOL_ID;
 use clap::Parser;
 use reth_cli_util::{get_secret_key, load_secret_key::rng_secret_key};
 use reth_discv4::{DiscoveryUpdate, Discv4, Discv4Config};
-use reth_discv5::{Config, Discv5, discv5::Event};
+use reth_discv5::{
+    Config, Discv5,
+    discv5::{
+        Event,
+        enr::{IP_ENR_KEY, IP6_ENR_KEY},
+    },
+};
 use reth_net_nat::NatResolver;
 use reth_network_peers::NodeRecord;
 use secp256k1::SecretKey;
@@ -61,10 +68,6 @@ impl Command {
         if self.v5 {
             info!("Starting discv5");
             let external_addr = self.nat.external_addr().await;
-            let mut amended_external_addr = self.addr.clone();
-            if let Some(external_addr) = external_addr {
-                amended_external_addr.set_ip(external_addr);
-            }
             let mut inner_builder = reth_discv5::discv5::ConfigBuilder::new(
                 reth_discv5::DEFAULT_DISCOVERY_V5_LISTEN_CONFIG,
             );
@@ -72,9 +75,19 @@ impl Command {
                 protocol_id: BASE_PROTOCOL_ID,
                 ..Default::default()
             });
-            let config =
-                Config::builder(amended_external_addr).discv5_config(inner_builder.build()).build();
-            let (_discv5, updates) = Discv5::start(&sk, config).await?;
+            let mut config = Config::builder(self.addr).discv5_config(inner_builder.build());
+
+            // TODO: handle dual-stack (maybe not supported with external_addr?)
+            config = match external_addr {
+                Some(std::net::IpAddr::V4(addr)) => {
+                    config.add_enr_kv_pair(IP_ENR_KEY, Bytes::from(addr.octets()))
+                }
+                Some(std::net::IpAddr::V6(addr)) => {
+                    config.add_enr_kv_pair(IP6_ENR_KEY, Bytes::from(addr.octets()))
+                }
+                _ => config,
+            };
+            let (_discv5, updates) = Discv5::start(&sk, config.build()).await?;
             discv5_updates = Some(updates);
         };
 

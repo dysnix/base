@@ -3957,6 +3957,7 @@ name = "base-execution-cli"
 version = "0.8.0"
 dependencies = [
  "alloy-eips",
+ "alloy-primitives",
  "backon",
  "base-common-consensus",
  "base-execution-chainspec",
