@@ -23,6 +23,8 @@ const MULTI_BLOCK_COUNT: usize = 8;
 const MULTI_BLOCK_TOUCHED_CHANNEL_COUNT: usize = 4_096;
 const READY_TRANSITION_BLOCK_COUNT: usize = 4;
 const READY_TRANSITION_CHANNEL_COUNT: usize = 1_024;
+const STAGGERED_READY_BLOCK_COUNT: usize = 4;
+const STAGGERED_READY_CHANNEL_COUNT: usize = 1_024;
 
 fn test_rollup_config() -> RollupConfig {
     RollupConfig {
@@ -225,6 +227,36 @@ fn multi_block_ready_transition_tx_payloads(
                 number: block_index as u16,
                 data: frame_data,
                 is_last: block_index + 1 == block_count,
+            }]));
+        }
+    }
+
+    block_tx_payloads
+}
+
+fn multi_block_staggered_ready_tx_payloads(
+    block_count: usize,
+    channel_count: usize,
+) -> Vec<Vec<Vec<u8>>> {
+    let mut block_tx_payloads: Vec<Vec<Vec<u8>>> =
+        (0..block_count).map(|_| Vec::with_capacity(channel_count)).collect();
+
+    for index in 0..channel_count {
+        let channel_id = channel_id(index);
+        let encoded_batch = encode_single_batch(&SingleBatch {
+            timestamp: 1_010 + index as u64 * 2,
+            ..Default::default()
+        });
+        let ready_block = index % block_count;
+
+        for (block_index, frame_data) in
+            split_frame_data_across_blocks(&encoded_batch, ready_block + 1).into_iter().enumerate()
+        {
+            block_tx_payloads[block_index].push(encode_tx_frames_payload(&[Frame {
+                id: channel_id,
+                number: block_index as u16,
+                data: frame_data,
+                is_last: block_index == ready_block,
             }]));
         }
     }
@@ -877,6 +909,62 @@ fn bench_recent_tx_process_blocks_ready_transition(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_recent_tx_process_blocks_staggered_ready(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batcher_service/recent_txs/process_blocks_staggered_ready");
+    group.sample_size(15);
+
+    let rollup_config = test_rollup_config();
+    let block_tx_payloads = multi_block_staggered_ready_tx_payloads(
+        STAGGERED_READY_BLOCK_COUNT,
+        STAGGERED_READY_CHANNEL_COUNT,
+    );
+
+    group.bench_function("baseline_vec_scan_all_4_blocks_1024_channels_ready_in_quarters", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_vec_tracking_and_full_scan(
+                    black_box(&mut channels),
+                    black_box(&block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("fresh_tracker_4_blocks_1024_channels_ready_in_quarters", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_fresh_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("reused_tracker_4_blocks_1024_channels_ready_in_quarters", |b| {
+        b.iter_batched(
+            HashMap::new,
+            |mut channels| {
+                black_box(process_blocks_with_tracker_and_touched_only_drain(
+                    black_box(&mut channels),
+                    black_box(&block_tx_payloads),
+                    black_box(&rollup_config),
+                ));
+                black_box(channels)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_recent_tx_ready_channel_lookup,
@@ -885,5 +973,6 @@ criterion_group!(
     bench_recent_tx_process_block,
     bench_recent_tx_process_blocks,
     bench_recent_tx_process_blocks_ready_transition,
+    bench_recent_tx_process_blocks_staggered_ready,
 );
 criterion_main!(benches);
