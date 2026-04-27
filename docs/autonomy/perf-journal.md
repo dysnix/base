@@ -208,3 +208,23 @@ Results:
 - focused validation passed again: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
 Next:
 - if this path is revisited again, add a multi-block benchmark that reuses the same tracker across successive synthetic L1 blocks so allocator reuse and survivor-heavy buffered-channel sets can be measured in a shape even closer to the real startup scan loop
+
+## 2026-04-27 11:57 UTC
+Focus: `base-batcher-service` recent-tx startup scan multi-block benchmarking coverage for tracker reuse.
+Hypothesis: the prior single-block harness still hid most of the small tracker-reuse benefit; a multi-block benchmark that keeps the buffered channel map alive across several synthetic L1 blocks should make the fresh-vs-reused tracker choice measurable in a shape closer to the real startup scan loop.
+Commands:
+- `cargo bench -p base-batcher-service --bench recent_txs -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- extended `crates/batcher/service/benches/recent_txs.rs` with new multi-block payload builders plus a `process_blocks` Criterion group that compares fresh tracker allocation per block against `TouchedChannelTracker::reset_with_capacity` reuse across eight successive synthetic blocks
+- `cargo test -p base-batcher-service recent_txs -- --nocapture`
+- `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+- `cargo bench -p base-batcher-service --bench recent_txs -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+Results:
+- kept production logic unchanged and added benchmark-only coverage for the exact next gap identified in the previous run: persistent buffered channels across multiple synthetic blocks with touched-only draining after each block
+- the new `process_blocks` group isolates tracker lifecycle cost better than the single-block harness by letting channels persist while replaying `8 × 4096` incomplete touches, which is closer to a survivor-heavy startup scan
+- new multi-block benchmark results:
+  - `fresh_tracker_8_blocks_4096_incomplete_touches_each_among_persistent_channels`: `3.8344 ms .. 4.2619 ms`
+  - `reused_tracker_8_blocks_4096_incomplete_touches_each_among_persistent_channels`: `3.7320 ms .. 3.8966 ms` (~6.4% lower median)
+- confirming run also kept the earlier block-level signal intact: `baseline_vec_scan_all_4096_ready_unique_channels_from_empty` = `9.5838 ms .. 9.7675 ms`, `tracker_touched_only_4096_ready_unique_channels_from_empty` = `7.6493 ms .. 7.8187 ms`
+- focused validation passed again: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+Next:
+- if this startup-scan path is revisited again, extend the multi-block harness with channels that become ready only on later blocks so the benchmark covers both tracker reuse and the eventual decode/drain transition inside a persistent survivor-heavy channel set
