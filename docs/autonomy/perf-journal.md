@@ -475,3 +475,26 @@ Results:
 - interpretation: for large channels, decompression accounts for a substantial share of total decode time (`~38%` for zlib and `~19%` for brotli relative to the current `64`-batch full-decode medians), so the next meaningful optimization likely sits in zlib decompression or in the remaining per-batch RLP decode work rather than in additional constructor plumbing
 Next:
 - if this shared decode path is revisited again, split the `decode_all_batches` harness one step further by compression type so the next iteration can quantify how much of the remaining `~220 ms` to `~293 ms` non-constructor cost is specific to zlib channels versus shared post-decompression batch decoding.
+
+## 2026-04-28 13:39 UTC
+Focus: `base-protocol` shared decode-path benchmark correctness for compression-specific `BatchReader` decoding.
+Hypothesis: the current `decode_all_batches` bench only exercises zlib-valid fixtures/config, so adding protocol-valid brotli fixtures and a Fjord-active config should expose whether the earlier shared decode numbers were accidentally measuring early returns instead of real brotli decode work.
+Commands:
+- `cargo bench -p base-protocol --bench batch_reader decode_all_batches -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 20`
+- edited `crates/consensus/protocol/benches/batch_reader.rs` to add compression-tagged fixtures, prepend the brotli channel-version byte, and select a Fjord-active `RollupConfig` for brotli decode cases
+- `cargo fmt --all`
+- `cargo bench -p base-protocol --bench batch_reader decode_all_batches -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 20`
+- `cargo test -p base-protocol batch_reader -- --nocapture`
+- `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- extracted median `point_estimate` values from `target/criterion/protocol_batch_reader_decode_all_batches/*/*/base/estimates.json`
+Results:
+- corrected the shared decode benchmark so brotli cases now use protocol-valid channel bytes (`CHANNEL_VERSION_BROTLI` prefix) and a Fjord-active rollup config instead of accidentally short-circuiting on unsupported-type or pre-Fjord checks
+- validation passed: `cargo test -p base-protocol batch_reader -- --nocapture` (`2 passed`) and `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- refreshed decode medians now split cleanly by compression type:
+  - zlib `1` batch: baseline `5.3706 ms` vs owned `5.4123 ms` (~`0.8%` slower, noise)
+  - brotli `1` batch: baseline `7.9290 ms` vs owned `8.0884 ms` (~`2.0%` slower, noise)
+  - zlib `64` batches: baseline `376.38 ms` vs owned `361.43 ms` (~`4.0%` lower median)
+  - brotli `64` batches: baseline `290.80 ms` vs owned `288.24 ms` (~`0.9%` lower median)
+- interpretation: the earlier sub-microsecond brotli results were benchmark-fixture artifacts, not real decode throughput; with valid brotli inputs the shared decode floor is on the same order as zlib and still shows the strongest owned-`Bytes` win on large zlib channels
+Next:
+- if this shared decode path is revisited again, extend the protocol bench with separate post-decompression decode coverage (for example feed pre-decompressed zlib and brotli payloads into the same batch-decoding loop) so the next iteration can quantify how much of the remaining large-channel gap is codec-specific versus shared RLP/batch decoding.

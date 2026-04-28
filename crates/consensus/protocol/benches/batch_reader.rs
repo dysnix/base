@@ -3,7 +3,7 @@
 use std::hint::black_box;
 
 use alloy_primitives::{Bytes, hex};
-use base_common_genesis::RollupConfig;
+use base_common_genesis::{HardForkConfig, RollupConfig};
 use base_protocol::{BatchReader, Brotli};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use miniz_oxide::{
@@ -12,6 +12,13 @@ use miniz_oxide::{
 };
 
 const BATCH_COUNTS: [usize; 2] = [1, 64];
+
+#[derive(Clone)]
+struct CompressionFixture {
+    label: &'static str,
+    compressed: Bytes,
+    max_rlp_bytes_per_channel: usize,
+}
 
 fn decompressed_batch_fixture(batch_count: usize) -> Vec<u8> {
     let file_contents = String::from_utf8_lossy(include_bytes!("../testdata/batch.hex"));
@@ -38,7 +45,7 @@ fn brotli_compressed_batch_fixture(batch_count: usize) -> (Bytes, usize) {
     let multi_batch = decompressed_batch_fixture(batch_count);
     let max_rlp_bytes_per_channel = multi_batch.len();
 
-    let mut compressed = Vec::new();
+    let mut compressed = vec![BatchReader::CHANNEL_VERSION_BROTLI];
     let mut input = multi_batch.as_slice();
     let params = brotli::enc::BrotliEncoderParams::default();
     brotli::BrotliCompress(&mut input, &mut compressed, &params)
@@ -47,12 +54,42 @@ fn brotli_compressed_batch_fixture(batch_count: usize) -> (Bytes, usize) {
     (compressed.into(), max_rlp_bytes_per_channel)
 }
 
+fn compression_fixtures(batch_count: usize) -> [CompressionFixture; 2] {
+    let (zlib_compressed, zlib_max_rlp_bytes_per_channel) = compressed_batch_fixture(batch_count);
+    let (brotli_compressed, brotli_max_rlp_bytes_per_channel) =
+        brotli_compressed_batch_fixture(batch_count);
+
+    [
+        CompressionFixture {
+            label: "zlib",
+            compressed: zlib_compressed,
+            max_rlp_bytes_per_channel: zlib_max_rlp_bytes_per_channel,
+        },
+        CompressionFixture {
+            label: "brotli",
+            compressed: brotli_compressed,
+            max_rlp_bytes_per_channel: brotli_max_rlp_bytes_per_channel,
+        },
+    ]
+}
+
 fn decode_all_batches(mut reader: BatchReader, cfg: &RollupConfig) -> usize {
     let mut batch_count = 0;
     while reader.next_batch(cfg).is_some() {
         batch_count += 1;
     }
     batch_count
+}
+
+fn bench_rollup_config(label: &'static str) -> RollupConfig {
+    match label {
+        "brotli" => RollupConfig {
+            hardforks: HardForkConfig { fjord_time: Some(0), ..Default::default() },
+            ..Default::default()
+        },
+        "zlib" => RollupConfig::default(),
+        unsupported => panic!("unsupported compression label: {unsupported}"),
+    }
 }
 
 fn bench_batch_reader_constructor(c: &mut Criterion) {
@@ -105,20 +142,19 @@ fn bench_batch_reader_decompression_only(c: &mut Criterion) {
     group.sample_size(20);
 
     for batch_count in BATCH_COUNTS {
-        let (zlib_compressed, max_rlp_bytes_per_channel) = compressed_batch_fixture(batch_count);
-        let (brotli_compressed, _) = brotli_compressed_batch_fixture(batch_count);
+        let [zlib_fixture, brotli_fixture] = compression_fixtures(batch_count);
 
         group.bench_with_input(
             BenchmarkId::new("zlib", batch_count),
-            &zlib_compressed,
-            |b, compressed| {
+            &zlib_fixture,
+            |b, fixture| {
                 b.iter_batched(
-                    || compressed.clone(),
+                    || fixture.compressed.clone(),
                     |data| {
                         black_box(
                             decompress_to_vec_zlib_with_limit(
                                 black_box(data).as_ref(),
-                                black_box(max_rlp_bytes_per_channel),
+                                black_box(fixture.max_rlp_bytes_per_channel),
                             )
                             .expect("zlib fixture must decompress"),
                         );
@@ -130,16 +166,16 @@ fn bench_batch_reader_decompression_only(c: &mut Criterion) {
 
         group.bench_with_input(
             BenchmarkId::new("brotli", batch_count),
-            &brotli_compressed,
-            |b, compressed| {
+            &brotli_fixture,
+            |b, fixture| {
                 b.iter_batched(
-                    || compressed.clone(),
+                    || fixture.compressed.clone(),
                     |data| {
                         black_box(
                             Brotli
                                 .decompress(
                                     black_box(data).as_ref(),
-                                    black_box(max_rlp_bytes_per_channel),
+                                    black_box(fixture.max_rlp_bytes_per_channel),
                                 )
                                 .expect("brotli fixture must decompress"),
                         );
@@ -157,46 +193,49 @@ fn bench_batch_reader_decode_all_batches(c: &mut Criterion) {
     let mut group = c.benchmark_group("protocol/batch_reader/decode_all_batches");
     group.sample_size(20);
 
-    let cfg = RollupConfig::default();
     for batch_count in BATCH_COUNTS {
-        let (compressed, max_rlp_bytes_per_channel) = compressed_batch_fixture(batch_count);
+        for fixture in compression_fixtures(batch_count) {
+            let cfg = bench_rollup_config(fixture.label);
+            group.bench_with_input(
+                BenchmarkId::new(format!("baseline_vec_clone_{}", fixture.label), batch_count),
+                &fixture,
+                |b, fixture| {
+                    b.iter_batched(
+                        || fixture.compressed.clone(),
+                        |data| {
+                            black_box(decode_all_batches(
+                                BatchReader::new(
+                                    black_box(data).to_vec(),
+                                    black_box(fixture.max_rlp_bytes_per_channel),
+                                ),
+                                black_box(&cfg),
+                            ));
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
 
-        group.bench_with_input(
-            BenchmarkId::new("baseline_vec_clone", batch_count),
-            &compressed,
-            |b, compressed| {
-                b.iter_batched(
-                    || compressed.clone(),
-                    |data| {
-                        black_box(decode_all_batches(
-                            BatchReader::new(
-                                black_box(data).to_vec(),
-                                black_box(max_rlp_bytes_per_channel),
-                            ),
-                            black_box(&cfg),
-                        ));
-                    },
-                    BatchSize::SmallInput,
-                );
-            },
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("owned_bytes", batch_count),
-            &compressed,
-            |b, compressed| {
-                b.iter_batched(
-                    || compressed.clone(),
-                    |data| {
-                        black_box(decode_all_batches(
-                            BatchReader::new(black_box(data), black_box(max_rlp_bytes_per_channel)),
-                            black_box(&cfg),
-                        ));
-                    },
-                    BatchSize::SmallInput,
-                );
-            },
-        );
+            group.bench_with_input(
+                BenchmarkId::new(format!("owned_bytes_{}", fixture.label), batch_count),
+                &fixture,
+                |b, fixture| {
+                    b.iter_batched(
+                        || fixture.compressed.clone(),
+                        |data| {
+                            black_box(decode_all_batches(
+                                BatchReader::new(
+                                    black_box(data),
+                                    black_box(fixture.max_rlp_bytes_per_channel),
+                                ),
+                                black_box(&cfg),
+                            ));
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
     }
 
     group.finish();
