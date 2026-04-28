@@ -498,3 +498,30 @@ Results:
 - interpretation: the earlier sub-microsecond brotli results were benchmark-fixture artifacts, not real decode throughput; with valid brotli inputs the shared decode floor is on the same order as zlib and still shows the strongest owned-`Bytes` win on large zlib channels
 Next:
 - if this shared decode path is revisited again, extend the protocol bench with separate post-decompression decode coverage (for example feed pre-decompressed zlib and brotli payloads into the same batch-decoding loop) so the next iteration can quantify how much of the remaining large-channel gap is codec-specific versus shared RLP/batch decoding.
+
+## 2026-04-28 16:01 UTC
+Focus: `base-protocol` shared decode-path split between decompression and post-decompression batch decoding.
+Hypothesis: after correcting protocol-valid brotli fixtures, a post-decompression decode-only harness should show whether the remaining large-channel floor is still mostly codec work or mostly shared RLP/batch decoding.
+Commands:
+- `cargo bench -p base-protocol --bench batch_reader decode_all_batches -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- edited `crates/consensus/protocol/benches/batch_reader.rs` to add `decode_all_batches_from_decompressed` and a new `protocol/batch_reader/post_decompression_decode_only` Criterion group
+- fixed the existing brotli decompression-only bench to strip the leading `CHANNEL_VERSION_BROTLI` byte before calling the raw `Brotli.decompress` helper
+- `cargo fmt --all`
+- `cargo test -p base-protocol batch_reader -- --nocapture`
+- `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- `cargo bench -p base-protocol --bench batch_reader post_decompression_decode_only -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- `cargo bench -p base-protocol --bench batch_reader decompression_only -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- `cargo bench -p base-protocol --bench batch_reader decode_all_batches -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- extracted median `point_estimate` values from `target/criterion/protocol_batch_reader_{post_decompression_decode_only,decompression_only,decode_all_batches}/*/*/new/estimates.json`
+Results:
+- added benchmark-only coverage that decodes batches from already-decompressed channel payloads, isolating shared `Bytes::decode` + `Batch::decode` work from the codec step without changing production logic
+- corrected the raw brotli decompression microbench so it now measures the actual compressed payload rather than the protocol wrapper byte; the old helper expects the payload after the version byte even though `BatchReader` itself consumes the tagged channel bytes
+- validation passed again: `cargo test -p base-protocol batch_reader -- --nocapture` (`2 passed`) and `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- median benchmark results on the current tree:
+  - post-decompression decode-only: zlib `1` batch `3.338 ms`, brotli `1` batch `3.378 ms`, zlib `64` batches `224.88 ms`, brotli `64` batches `223.63 ms`
+  - decompression-only: zlib `1` batch `1.928 ms`, brotli `1` batch `4.078 ms`, zlib `64` batches `134.25 ms`, brotli `64` batches `59.66 ms`
+  - full decode with owned `Bytes`: zlib `1` batch `5.328 ms`, brotli `1` batch `7.693 ms`, zlib `64` batches `353.93 ms`, brotli `64` batches `278.80 ms`
+  - refreshed full-decode baseline vs owned comparison on the same run: zlib `64` batches `365.03 ms` baseline vs `353.93 ms` owned (~`3.0%` lower); brotli `64` batches `278.34 ms` baseline vs `278.80 ms` owned (effectively flat / noise)
+- interpretation: on large zlib channels the remaining floor is split between codec work (`134.25 ms`, ~`37.9%` of total) and post-decompression batch decode (`224.88 ms`, ~`63.5%` of total), while on large brotli channels most of the cost is now clearly in shared post-decompression decode (`223.63 ms`, ~`80.2%` of total) rather than brotli itself (`59.66 ms`, ~`21.4%`)
+Next:
+- if this decode path is revisited again, profile or microbenchmark the shared post-decompression path itself (for example `Bytes::decode` framing versus `Batch::decode`/span derivation) because that now looks like the dominant remaining hotspot, especially for brotli channels.

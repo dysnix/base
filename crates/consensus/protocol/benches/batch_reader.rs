@@ -3,8 +3,9 @@
 use std::hint::black_box;
 
 use alloy_primitives::{Bytes, hex};
+use alloy_rlp::Decodable;
 use base_common_genesis::{HardForkConfig, RollupConfig};
-use base_protocol::{BatchReader, Brotli};
+use base_protocol::{Batch, BatchReader, Brotli};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use miniz_oxide::{
     deflate::{CompressionLevel, compress_to_vec_zlib},
@@ -78,6 +79,22 @@ fn decode_all_batches(mut reader: BatchReader, cfg: &RollupConfig) -> usize {
     while reader.next_batch(cfg).is_some() {
         batch_count += 1;
     }
+    batch_count
+}
+
+fn decode_all_batches_from_decompressed(mut data: &[u8], cfg: &RollupConfig) -> usize {
+    let mut batch_count = 0;
+
+    while !data.is_empty() {
+        let Ok(bytes) = Bytes::decode(&mut data) else {
+            break;
+        };
+        let Ok(_) = Batch::decode(&mut bytes.as_ref(), cfg) else {
+            break;
+        };
+        batch_count += 1;
+    }
+
     batch_count
 }
 
@@ -174,7 +191,7 @@ fn bench_batch_reader_decompression_only(c: &mut Criterion) {
                         black_box(
                             Brotli
                                 .decompress(
-                                    black_box(data).as_ref(),
+                                    black_box(&data[1..]),
                                     black_box(fixture.max_rlp_bytes_per_channel),
                                 )
                                 .expect("brotli fixture must decompress"),
@@ -241,10 +258,42 @@ fn bench_batch_reader_decode_all_batches(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_batch_reader_post_decompression_decode_only(c: &mut Criterion) {
+    let mut group = c.benchmark_group("protocol/batch_reader/post_decompression_decode_only");
+    group.sample_size(20);
+
+    for batch_count in BATCH_COUNTS {
+        for fixture in compression_fixtures(batch_count) {
+            let cfg = bench_rollup_config(fixture.label);
+            let decompressed = decompressed_batch_fixture(batch_count);
+
+            group.bench_with_input(
+                BenchmarkId::new(fixture.label, batch_count),
+                &decompressed,
+                |b, decompressed| {
+                    b.iter_batched(
+                        || decompressed.clone(),
+                        |data| {
+                            black_box(decode_all_batches_from_decompressed(
+                                black_box(data).as_slice(),
+                                black_box(&cfg),
+                            ));
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_batch_reader_constructor,
     bench_batch_reader_decompression_only,
     bench_batch_reader_decode_all_batches,
+    bench_batch_reader_post_decompression_decode_only,
 );
 criterion_main!(benches);
