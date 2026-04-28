@@ -6,12 +6,12 @@ use std::{
 };
 
 use alloy_eips::eip1898::BlockNumHash;
-use alloy_primitives::B256;
+use alloy_primitives::{B256, Bytes};
 use alloy_rlp::Encodable;
 use base_batcher_service::{RecentTxScanner, TouchedChannelTracker};
 use base_common_genesis::{ChainGenesis, RollupConfig};
 use base_protocol::{
-    Batch, BlockInfo, Channel, ChannelId, DERIVATION_VERSION_0, Frame, SingleBatch,
+    Batch, BatchReader, BlockInfo, Channel, ChannelId, DERIVATION_VERSION_0, Frame, SingleBatch,
 };
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
@@ -27,6 +27,8 @@ const STAGGERED_READY_BLOCK_COUNT: usize = 4;
 const STAGGERED_READY_CHANNEL_COUNT: usize = 1_024;
 const MIXED_READY_BLOCK_COUNT: usize = 4;
 const DECODE_DENSITY_CHANNEL_COUNT: usize = 1_024;
+const DECODE_COMPONENT_BATCH_COUNT: usize = 16;
+const DECODE_COMPONENT_FRAME_COUNTS: [usize; 3] = [1, 4, 16];
 const DECODE_DENSITY_READY_CHANNEL_COUNTS: [usize; 4] = [0, 256, 512, DECODE_DENSITY_CHANNEL_COUNT];
 const FRONT_LOADED_READY_CHANNEL_COUNTS: [usize; STAGGERED_READY_BLOCK_COUNT] =
     [512, 256, 128, 128];
@@ -75,6 +77,20 @@ fn encode_single_batch(batch: &SingleBatch) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec_zlib(&rlp_buf, 6)
 }
 
+fn encode_single_batch_stream(batch_count: usize) -> Vec<u8> {
+    let mut rlp_buf = Vec::new();
+    for batch_index in 0..batch_count {
+        let typed_batch = Batch::Single(SingleBatch {
+            timestamp: 1_010 + batch_index as u64 * 2,
+            ..Default::default()
+        });
+        let mut batch_bytes = Vec::new();
+        typed_batch.encode(&mut batch_bytes).expect("batch must encode");
+        batch_bytes.as_slice().encode(&mut rlp_buf);
+    }
+    miniz_oxide::deflate::compress_to_vec_zlib(&rlp_buf, 6)
+}
+
 fn ready_channel(id: ChannelId, timestamp: u64) -> Channel {
     let block_info = BlockInfo::default();
     let mut channel = Channel::new(id, block_info);
@@ -89,6 +105,30 @@ fn ready_channel(id: ChannelId, timestamp: u64) -> Channel {
             block_info,
         )
         .expect("frame must be accepted");
+    channel
+}
+
+fn ready_multi_batch_channel(id: ChannelId, frame_count: usize, batch_count: usize) -> Channel {
+    let block_info = BlockInfo::default();
+    let mut channel = Channel::new(id, block_info);
+    let compressed_batches = encode_single_batch_stream(batch_count);
+
+    for (frame_number, frame_data) in
+        split_frame_data_across_blocks(&compressed_batches, frame_count).into_iter().enumerate()
+    {
+        channel
+            .add_frame(
+                Frame {
+                    id,
+                    number: frame_number as u16,
+                    data: frame_data,
+                    is_last: frame_number + 1 == frame_count,
+                },
+                block_info,
+            )
+            .expect("frame must be accepted");
+    }
+
     channel
 }
 
@@ -421,6 +461,37 @@ fn prebuffered_decode_density_fixture(
     }
 
     (channels, tx_payloads)
+}
+
+fn decode_channel_data(
+    data: Bytes,
+    inclusion_timestamp: u64,
+    rollup_config: &RollupConfig,
+) -> Option<u64> {
+    let max_rlp = rollup_config.max_rlp_bytes_per_channel(inclusion_timestamp) as usize;
+    let mut reader = BatchReader::new(data, max_rlp);
+    let mut highest_l2 = None;
+
+    while let Some(batch) = reader.next_batch(rollup_config) {
+        let last_timestamp = match &batch {
+            Batch::Single(single_batch) => single_batch.timestamp,
+            Batch::Span(span_batch) => span_batch.final_timestamp(),
+        };
+        let relative = rollup_config.block_number_from_timestamp(last_timestamp);
+        let l2_block = rollup_config.genesis.l2.number + relative;
+        highest_l2 = Some(highest_l2.map_or(l2_block, |highest: u64| highest.max(l2_block)));
+    }
+
+    highest_l2
+}
+
+fn decode_ready_channel(
+    channel: &Channel,
+    inclusion_timestamp: u64,
+    rollup_config: &RollupConfig,
+) -> Option<u64> {
+    let data = channel.frame_data().expect("fixture channel must be ready");
+    decode_channel_data(data, inclusion_timestamp, rollup_config)
 }
 
 fn track_touched_channel_ids_with_vec(frame_channel_ids: &[ChannelId]) -> Vec<ChannelId> {
@@ -1571,6 +1642,68 @@ fn bench_recent_tx_process_block_decode_density(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_recent_tx_decode_channel_components(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batcher_service/recent_txs/decode_channel_components");
+    group.sample_size(15);
+
+    let rollup_config = test_rollup_config();
+
+    for frame_count in DECODE_COMPONENT_FRAME_COUNTS {
+        let channel = ready_multi_batch_channel(
+            channel_id(frame_count),
+            frame_count,
+            DECODE_COMPONENT_BATCH_COUNT,
+        );
+        let frame_data = channel.frame_data().expect("fixture channel must be ready");
+
+        group.bench_with_input(
+            BenchmarkId::new("frame_data_only_16_batches_split_across_frames", frame_count),
+            &frame_count,
+            |b, _| {
+                b.iter(|| {
+                    black_box(
+                        black_box(&channel).frame_data().expect("fixture channel must be ready"),
+                    )
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new(
+                "batch_reader_only_preaggregated_16_batches_split_across_frames",
+                frame_count,
+            ),
+            &frame_count,
+            |b, _| {
+                b.iter(|| {
+                    black_box(decode_channel_data(
+                        black_box(frame_data.clone()),
+                        black_box(0),
+                        black_box(&rollup_config),
+                    ))
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new(
+                "frame_data_plus_batch_reader_16_batches_split_across_frames",
+                frame_count,
+            ),
+            &frame_count,
+            |b, _| {
+                b.iter(|| {
+                    black_box(decode_ready_channel(
+                        black_box(&channel),
+                        black_box(0),
+                        black_box(&rollup_config),
+                    ))
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_recent_tx_ready_channel_lookup,
@@ -1585,5 +1718,6 @@ criterion_group!(
     bench_recent_tx_process_blocks_touch_start_sparsity,
     bench_recent_tx_process_blocks_touch_start_matched_volume,
     bench_recent_tx_process_block_decode_density,
+    bench_recent_tx_decode_channel_components,
 );
 criterion_main!(benches);

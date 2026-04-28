@@ -394,3 +394,30 @@ Results:
 Next:
 - if this startup-scan path is revisited again, add a decode-only microbenchmark around `channel.frame_data()` + `BatchReader::next_batch()` so future work can isolate frame concatenation and decompression costs from touched-ID tracking and channel-map drain behavior.
 
+## 2026-04-28 06:57 UTC
+Focus: `base-batcher-service` recent-tx startup scan decode-component benchmark coverage.
+Hypothesis: the decode-density harness still mixed touched-ID draining, frame parsing, `channel.frame_data()`, and `BatchReader` work; a decode-only component bench should isolate whether the next likely hotspot is frame concatenation or decompression/decoding before touching production code again.
+Commands:
+- `cargo bench -p base-batcher-service --bench recent_txs process_block_decode_density -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- edited `crates/batcher/service/benches/recent_txs.rs` to add `decode_channel_components` coverage with ready multi-batch channels split across `1`, `4`, and `16` frames
+- `cargo fmt --all`
+- `cargo test -p base-batcher-service recent_txs -- --nocapture`
+- `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+- `cargo bench -p base-batcher-service --bench recent_txs decode_channel_components -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- extracted median `point_estimate` values from `target/criterion/.../estimates.json`
+Results:
+- kept production logic unchanged and added benchmark-only helpers that separately measure `channel.frame_data()` alone, `BatchReader` on preaggregated channel bytes alone, and the combined decode path for a `16`-batch ready channel
+- validation passed: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+- refreshed decode-density medians on the current tree to preserve continuity before the harness edit:
+  - `0` ready channels: baseline full scan `205.30 µs`; tracker+touched-only `104.18 µs` (~`49.3%` lower)
+  - `256` ready channels: baseline `681.31 µs`; tracker+touched-only `589.41 µs` (~`13.5%` lower)
+  - `512` ready channels: baseline `1.1581 ms`; tracker+touched-only `1.0310 ms` (~`11.0%` lower)
+  - `1024` ready channels: baseline `2.1614 ms`; tracker+touched-only `1.9537 ms` (~`9.6%` lower)
+- new decode-component medians show `BatchReader` dominates while `channel.frame_data()` stays a small but growing additive cost as frame count rises:
+  - `1` frame: `frame_data_only` `19.52 ns`; `batch_reader_only` `3.4034 µs`; combined `3.4197 µs`
+  - `4` frames: `frame_data_only` `25.62 ns`; `batch_reader_only` `3.4136 µs`; combined `3.3986 µs`
+  - `16` frames: `frame_data_only` `82.71 ns`; `batch_reader_only` `3.4251 µs`; combined `3.4930 µs`
+- interpretation: even when a ready channel is split across many frames, frame concatenation remains tiny relative to decompression and batch decoding, so the next production opportunity is more likely inside `BatchReader`/decode work than in additional `channel.frame_data()` tweaks
+Next:
+- if this path is revisited again, inspect `BatchReader::decompress` and per-batch decode overhead for reusable scratch buffers or avoidable allocations, using the new component harness to verify whether any candidate actually moves the `~3.4 µs` decode floor.
+
