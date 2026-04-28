@@ -98,6 +98,43 @@ fn decode_all_batches_from_decompressed(mut data: &[u8], cfg: &RollupConfig) -> 
     batch_count
 }
 
+fn batch_payloads_from_decompressed(mut data: &[u8]) -> Vec<Bytes> {
+    let mut batch_payloads = Vec::new();
+
+    while !data.is_empty() {
+        let bytes = Bytes::decode(&mut data).expect("decompressed fixture must decode bytes");
+        batch_payloads.push(bytes);
+    }
+
+    batch_payloads
+}
+
+fn count_rlp_wrapped_batches(mut data: &[u8]) -> usize {
+    let mut batch_count = 0;
+
+    while !data.is_empty() {
+        let Ok(_) = Bytes::decode(&mut data) else {
+            break;
+        };
+        batch_count += 1;
+    }
+
+    batch_count
+}
+
+fn decode_all_batch_payloads(batch_payloads: &[Bytes], cfg: &RollupConfig) -> usize {
+    let mut batch_count = 0;
+
+    for payload in batch_payloads {
+        let Ok(_) = Batch::decode(&mut payload.as_ref(), cfg) else {
+            break;
+        };
+        batch_count += 1;
+    }
+
+    batch_count
+}
+
 fn bench_rollup_config(label: &'static str) -> RollupConfig {
     match label {
         "brotli" => RollupConfig {
@@ -289,11 +326,54 @@ fn bench_batch_reader_post_decompression_decode_only(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_batch_reader_post_decompression_components(c: &mut Criterion) {
+    let mut group = c.benchmark_group("protocol/batch_reader/post_decompression_components");
+    group.sample_size(20);
+
+    for batch_count in BATCH_COUNTS {
+        for fixture in compression_fixtures(batch_count) {
+            let cfg = bench_rollup_config(fixture.label);
+            let decompressed = decompressed_batch_fixture(batch_count);
+            let batch_payloads = batch_payloads_from_decompressed(decompressed.as_slice());
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("rlp_only_{}", fixture.label), batch_count),
+                &decompressed,
+                |b, decompressed| {
+                    b.iter_batched(
+                        || decompressed.clone(),
+                        |data| {
+                            black_box(count_rlp_wrapped_batches(black_box(data).as_slice()));
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("batch_decode_only_{}", fixture.label), batch_count),
+                &batch_payloads,
+                |b, batch_payloads| {
+                    b.iter(|| {
+                        black_box(decode_all_batch_payloads(
+                            black_box(batch_payloads.as_slice()),
+                            black_box(&cfg),
+                        ));
+                    });
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_batch_reader_constructor,
     bench_batch_reader_decompression_only,
     bench_batch_reader_decode_all_batches,
     bench_batch_reader_post_decompression_decode_only,
+    bench_batch_reader_post_decompression_components,
 );
 criterion_main!(benches);

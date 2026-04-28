@@ -525,3 +525,25 @@ Results:
 - interpretation: on large zlib channels the remaining floor is split between codec work (`134.25 ms`, ~`37.9%` of total) and post-decompression batch decode (`224.88 ms`, ~`63.5%` of total), while on large brotli channels most of the cost is now clearly in shared post-decompression decode (`223.63 ms`, ~`80.2%` of total) rather than brotli itself (`59.66 ms`, ~`21.4%`)
 Next:
 - if this decode path is revisited again, profile or microbenchmark the shared post-decompression path itself (for example `Bytes::decode` framing versus `Batch::decode`/span derivation) because that now looks like the dominant remaining hotspot, especially for brotli channels.
+
+## 2026-04-28 18:08 UTC
+Focus: `base-protocol` shared post-decompression decode split between outer RLP framing and `Batch::decode` work.
+Hypothesis: the prior post-decompression harness still mixed `Bytes::decode` framing with actual batch decoding, so splitting those stages should reveal whether the remaining floor is in outer RLP payload extraction or inside batch-specific decode/derive logic.
+Commands:
+- `cargo bench -p base-protocol --bench batch_reader post_decompression_decode_only -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- edited `crates/consensus/protocol/benches/batch_reader.rs` to add `batch_payloads_from_decompressed`, `count_rlp_wrapped_batches`, `decode_all_batch_payloads`, and a new `protocol/batch_reader/post_decompression_components` Criterion group
+- `cargo fmt --all`
+- `cargo test -p base-protocol batch_reader -- --nocapture`
+- `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- `cargo bench -p base-protocol --bench batch_reader post_decompression_components -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- extracted median `point_estimate` values from `target/criterion/protocol_batch_reader_{post_decompression_decode_only,post_decompression_components}/*/*/new/estimates.json`
+Results:
+- kept production logic unchanged and added benchmark-only coverage that splits the shared post-decompression path into outer `Bytes::decode` framing (`rlp_only_*`) versus `Batch::decode` on pre-extracted payloads (`batch_decode_only_*`)
+- validation passed again: `cargo test -p base-protocol batch_reader -- --nocapture` (`2 passed`) and `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- refreshed post-decompression decode-only medians: zlib `1` batch `3.360 ms`, brotli `1` batch `3.416 ms`, zlib `64` batches `225.80 ms`, brotli `64` batches `224.80 ms`
+- new component medians:
+  - outer RLP framing only: zlib `1` batch `27.57 µs`, brotli `1` batch `25.93 µs`, zlib `64` batches `5.844 ms`, brotli `64` batches `5.441 ms`
+  - `Batch::decode` on pre-extracted payloads: zlib `1` batch `3.384 ms`, brotli `1` batch `3.398 ms`, zlib `64` batches `221.89 ms`, brotli `64` batches `221.59 ms`
+- interpretation: outer RLP framing is only about `0.8%` of the single-batch post-decompression path and about `2.4%` to `2.6%` of the `64`-batch path; nearly all remaining shared decode cost sits inside `Batch::decode`/span derivation rather than payload extraction
+Next:
+- if this decode path is revisited again, add a deeper component split inside `Batch::decode` itself (for example `SingleBatch::decode` versus `RawSpanBatch::decode` plus span derivation) so the next experiment can identify whether large-channel cost is dominated by raw span parsing, transaction-data decoding, or span derivation.
