@@ -3,7 +3,7 @@ variable "PROFILE" {
 }
 
 variable "RUST_VERSION" {
-  default = "1.93"
+  default = "1.93.1"
 }
 
 variable "REGISTRY_IMAGE" {
@@ -20,6 +20,7 @@ group "default" {
 
 group "rust-services" {
   targets = [
+    "base",
     "client",
     "builder",
     "consensus",
@@ -32,7 +33,7 @@ group "rust-services" {
 }
 
 group "devnet" {
-  targets = ["builder", "consensus", "client", "batcher"]
+  targets = ["base", "builder", "consensus", "client", "batcher"]
 }
 
 group "ingress" {
@@ -53,6 +54,12 @@ target "client" {
   inherits = ["_rust-service-common"]
   target = "client"
   tags = ["base-reth-node:local"]
+}
+
+target "base" {
+  inherits = ["_rust-service-common"]
+  target = "base"
+  tags = ["base:local"]
 }
 
 target "builder" {

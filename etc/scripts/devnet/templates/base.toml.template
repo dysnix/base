@@ -1,0 +1,13 @@
+name = "devnet"
+l2_chain_id = __L2_CHAIN_ID__
+l1_chain_id = __L1_CHAIN_ID__
+
+[execution]
+genesis_path = "/genesis/l2/genesis.json"
+sequencer_url = "http://base-builder:__L2_BUILDER_HTTP_PORT__"
+flashblocks_url = "ws://base-builder:__L2_BUILDER_FLASHBLOCKS_PORT__"
+
+[consensus]
+rollup_config_path = "/genesis/l2/rollup.json"
+l1_config_path = "/genesis/el/chain-config.json"
+l1_slot_duration_override = __L1_SLOT_DURATION_OVERRIDE__

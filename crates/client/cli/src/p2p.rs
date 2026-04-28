@@ -1,7 +1,7 @@
 //! P2P CLI Flags
 
 use std::{
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs},
     num::ParseIntError,
     path::PathBuf,
     str::FromStr,
@@ -262,6 +262,43 @@ pub enum P2PConfigError {
 }
 
 impl P2PArgs {
+    /// Returns the static CLI defaults without reading environment variables.
+    pub fn defaults_without_env() -> Self {
+        Self {
+            no_discovery: false,
+            priv_path: None,
+            private_key: None,
+            advertise_ip: None,
+            advertise_tcp_port: None,
+            advertise_udp_port: None,
+            listen_ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            listen_tcp_port: 9222,
+            listen_udp_port: 9223,
+            peers_lo: 20,
+            peers_hi: 30,
+            peers_grace: Duration::from_secs(30),
+            gossip_mesh_d: 8,
+            gossip_mesh_dlo: 6,
+            gossip_mesh_dhi: 12,
+            gossip_mesh_dlazy: 6,
+            gossip_flood_publish: false,
+            scoring: PeerScoreLevel::Light,
+            ban_enabled: false,
+            ban_threshold: -100,
+            ban_duration: 60,
+            discovery_interval: 5,
+            bootstore: None,
+            disable_bootstore: false,
+            peer_redial: Some(500),
+            redial_period: 60,
+            bootnodes: Vec::new(),
+            topic_scoring: false,
+            unsafe_block_signer: None,
+            discovery_randomize: None,
+            signer: SignerArgs::default(),
+        }
+    }
+
     fn check_ports_inner(ip_addr: IpAddr, tcp_port: u16, udp_port: u16) -> Result<()> {
         if tcp_port == 0 {
             return Ok(());

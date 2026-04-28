@@ -1,13 +1,14 @@
-use base_cli_utils::{LogConfig, MetricsConfig};
+use base_cli_utils::{LogConfig, MetricsConfig, RuntimeManager};
 use eyre::WrapErr;
 
-use crate::{cli::BaseCli, config::ChainResolver};
+use crate::cli::BaseCli;
+use crate::config::ChainResolver;
 
 /// Runs the `base` binary.
 #[derive(Debug, Clone)]
 pub(crate) struct BaseApp {
     /// Parsed CLI input.
-    pub cli: BaseCli,
+    cli: BaseCli,
 }
 
 impl BaseApp {
@@ -24,13 +25,11 @@ impl BaseApp {
             .init_tracing_subscriber()
             .wrap_err("failed to initialize tracing")?;
 
-        MetricsConfig::from(metrics)
-            .init_with(|| {
-                base_cli_utils::register_version_metrics!();
-            })
-            .wrap_err("failed to install Prometheus recorder")?;
-
         let resolved_chain = ChainResolver::new(chain).resolve()?;
-        command.run(resolved_chain)
+        let metrics_config = MetricsConfig::from(metrics);
+        let runtime =
+            RuntimeManager::new().tokio_runtime().wrap_err("failed to create Tokio runtime")?;
+
+        runtime.block_on(command.run(resolved_chain, metrics_config))
     }
 }

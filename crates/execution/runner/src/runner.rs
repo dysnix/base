@@ -89,8 +89,16 @@ impl<SB: PayloadServiceBuilder> BaseNodeRunner<SB> {
     /// Applies all Base-specific wiring to the supplied builder, launches the node, and waits for
     /// shutdown.
     pub async fn run(self, builder: BaseNodeBuilder) -> Result<()> {
+        let NodeHandle { node: _node, node_exit_future } = self.launch(builder).await?;
+        node_exit_future.await?;
+        Ok(())
+    }
+
+    /// Applies all Base-specific wiring to the supplied builder and launches the node without
+    /// awaiting shutdown.
+    pub async fn launch(self, builder: BaseNodeBuilder) -> Result<NodeHandleFor<BaseNode>> {
         let Self { rollup_args, extensions, service_builder, da_config, started_callbacks } = self;
-        let NodeHandle { node: _node, node_exit_future } = Self::launch_node(
+        Self::launch_node(
             rollup_args,
             extensions,
             service_builder,
@@ -98,9 +106,7 @@ impl<SB: PayloadServiceBuilder> BaseNodeRunner<SB> {
             started_callbacks,
             builder,
         )
-        .await?;
-        node_exit_future.await?;
-        Ok(())
+        .await
     }
 
     async fn launch_node(

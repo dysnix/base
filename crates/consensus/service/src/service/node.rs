@@ -283,11 +283,19 @@ impl RollupNode {
     /// finalizes `safe` blocks that it has derived when L1 finalized block updates are
     /// received.
     pub async fn start(&self) -> Result<(), String> {
+        self.start_with_cancellation(CancellationToken::new()).await
+    }
+
+    /// Starts the rollup node service with an externally managed cancellation token.
+    pub async fn start_with_cancellation(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<(), String> {
         let l1_head_number: base_consensus_providers::L1HeadNumber = Arc::new(AtomicU64::new(0));
         let pipeline = self.create_pipeline(Arc::clone(&l1_head_number)).await;
         let engine_client =
             Arc::new(self.engine_config().build_engine_client().await.map_err(|e| e.to_string())?);
-        self.start_inner(engine_client, pipeline, l1_head_number).await
+        self.start_inner(engine_client, pipeline, l1_head_number, cancellation).await
     }
 
     /// Starts the rollup node service with a pre-built derivation pipeline.
@@ -309,10 +317,24 @@ impl RollupNode {
         DerivationActor<QueuedDerivationEngineClient, P>:
             NodeActor<StartData = (), Error = DerivationError>,
     {
+        self.start_with_pipeline_and_cancellation(pipeline, CancellationToken::new()).await
+    }
+
+    /// Starts the rollup node service with a pre-built pipeline and external cancellation.
+    pub async fn start_with_pipeline_and_cancellation<P>(
+        &self,
+        pipeline: P,
+        cancellation: CancellationToken,
+    ) -> Result<(), String>
+    where
+        P: Pipeline + SignalReceiver + Send + Sync + 'static,
+        DerivationActor<QueuedDerivationEngineClient, P>:
+            NodeActor<StartData = (), Error = DerivationError>,
+    {
         let l1_head_number: base_consensus_providers::L1HeadNumber = Arc::new(AtomicU64::new(0));
         let engine_client =
             Arc::new(self.engine_config().build_engine_client().await.map_err(|e| e.to_string())?);
-        self.start_inner(engine_client, pipeline, l1_head_number).await
+        self.start_inner(engine_client, pipeline, l1_head_number, cancellation).await
     }
 
     /// Starts the rollup node with a pre-built engine client.
@@ -324,9 +346,19 @@ impl RollupNode {
         &self,
         engine_client: Arc<E>,
     ) -> Result<(), String> {
+        self.start_with_engine_client_and_cancellation(engine_client, CancellationToken::new())
+            .await
+    }
+
+    /// Starts the rollup node with a pre-built engine client and external cancellation.
+    pub async fn start_with_engine_client_and_cancellation<E: EngineClient + 'static>(
+        &self,
+        engine_client: Arc<E>,
+        cancellation: CancellationToken,
+    ) -> Result<(), String> {
         let l1_head_number: base_consensus_providers::L1HeadNumber = Arc::new(AtomicU64::new(0));
         let pipeline = self.create_pipeline(Arc::clone(&l1_head_number)).await;
-        self.start_inner(engine_client, pipeline, l1_head_number).await
+        self.start_inner(engine_client, pipeline, l1_head_number, cancellation).await
     }
 
     async fn start_inner<E, P>(
@@ -334,6 +366,7 @@ impl RollupNode {
         engine_client: Arc<E>,
         pipeline: P,
         l1_head_number: base_consensus_providers::L1HeadNumber,
+        cancellation: CancellationToken,
     ) -> Result<(), String>
     where
         E: EngineClient + 'static,
@@ -341,8 +374,6 @@ impl RollupNode {
         DerivationActor<QueuedDerivationEngineClient, P>:
             NodeActor<StartData = (), Error = DerivationError>,
     {
-        let cancellation = CancellationToken::new();
-
         // Build the safe head DB pair. Both actors share the same underlying DB via Arc.
         //
         // In delegate mode the local derivation actor is replaced by a `DelegateDerivationActor`

@@ -4,17 +4,18 @@ set working-directory := '../..'
 _ha := "-f etc/docker/docker-compose.yml -f etc/docker/docker-compose.ha.yml"
 _base := "-f etc/docker/docker-compose.yml"
 _env := "--env-file etc/docker/devnet-env"
+_cargo_profile := env_var_or_default("CARGO_PROFILE", "dev")
 
 # Show devnet commands
 default:
     @just --justfile {{source_file()}} --list
 
 # Stops devnet, deletes data, and starts fresh (3-node HA conductor cluster)
-up: down _build-setup-image (_build-rust-images "devnet" "dev")
+up: down _build-setup-image (_build-rust-images "devnet" _cargo_profile)
     docker compose {{ _env }} {{ _ha }} up -d --no-build --scale contender=0
 
 # Stops devnet, deletes data, and starts fresh with a single sequencer (no conductor)
-up-single: down _build-setup-image (_build-rust-images "devnet" "dev")
+up-single: down _build-setup-image (_build-rust-images "devnet" _cargo_profile)
     docker compose {{ _env }} {{ _base }} up -d --no-build --scale contender=0
 
 # Stops devnet, deletes data, and starts fresh with profiling (Pyroscope + optimized builds)

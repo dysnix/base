@@ -147,6 +147,7 @@ services:
       - ../../.devnet/l2/builder-cl:/data/l2-builder-cl
       - ../../.devnet/l2/client:/data/l2-client
       - ../../.devnet/l2/client-cl:/data/l2-client-cl
+      - ../../.devnet/l2/validator:/data/l2-validator
     environment:
       - L1_RPC_URL=http://l1-el:${L1_HTTP_PORT}
       - L1_CHAIN_ID=${L1_CHAIN_ID}
@@ -466,6 +467,61 @@ services:
       - "${BASE_NODE_VERIFIER_L1_CONFS}"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:${L2_CLIENT_CL_RPC_PORT}/healthz"]
+      interval: 250ms
+      timeout: 1s
+      retries: 240
+      start_period: 250ms
+    restart: unless-stopped
+
+  base-validator:
+    image: base:local
+    build:
+      <<: *rust-service-build
+      target: base
+    container_name: base-validator
+    depends_on:
+      setup-l2:
+        condition: service_completed_successfully
+      base-builder-cl:
+        condition: service_healthy
+    ports:
+      - "${L2_VALIDATOR_HTTP_PORT}:8545"     # EL HTTP RPC
+      - "${L2_VALIDATOR_WS_PORT}:8546"       # EL WebSocket RPC
+      - "${L2_VALIDATOR_CL_RPC_PORT}:9545"   # CL RPC
+      - "${L2_VALIDATOR_METRICS_PORT}:${L2_VALIDATOR_METRICS_PORT}"  # Metrics
+    volumes:
+      - ../../.devnet/l2/validator:/data
+      - ../../.devnet/l1/configs:/genesis:ro
+      - ../../.devnet/l2/configs:/genesis/l2:ro
+    environment:
+      - OTEL_SERVICE_NAME=base-validator
+    entrypoint: /app/base
+    command:
+      - --chain
+      - /genesis/l2/base.toml
+      - node
+      - --datadir
+      - /data
+      - --l1-eth-rpc
+      - http://l1-el:${L1_HTTP_PORT}
+      - --l1-beacon
+      - http://l1-cl:${L1_CL_HTTP_PORT}
+      - --execution.trusted-peers
+      - enode://${BUILDER_ENODE_ID}@base-builder:${L2_BUILDER_P2P_PORT}
+      - --p2p.bootnodes
+      - enode://${BUILDER_ENODE_ID}@base-builder-cl:${L2_BUILDER_CL_P2P_PORT}
+      - --p2p.advertise.ip
+      - base-validator
+      - --l1.verifier-confs
+      - "${BASE_NODE_VERIFIER_L1_CONFS}"
+      - --metrics.enabled
+      - --metrics.addr
+      - "0.0.0.0"
+      - --metrics.port
+      - "${L2_VALIDATOR_METRICS_PORT}"
+      - -vvv
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9545/healthz"]
       interval: 250ms
       timeout: 1s
       retries: 240

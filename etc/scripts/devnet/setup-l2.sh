@@ -178,6 +178,27 @@ op-deployer inspect l1 \
   >"$OUTPUT_DIR/l1-addresses.json"
 echo "L1 addresses written to $OUTPUT_DIR/l1-addresses.json"
 
+awk \
+  -v l1_chain_id="$L1_CHAIN_ID" \
+  -v l2_chain_id="$L2_CHAIN_ID" \
+  -v l1_slot_duration_override="4" \
+  -v l2_builder_http_port="$L2_BUILDER_HTTP_PORT" \
+  -v l2_builder_flashblocks_port="$L2_BUILDER_FLASHBLOCKS_PORT" \
+  '
+  {
+    gsub("__L1_CHAIN_ID__", l1_chain_id)
+    gsub("__L2_CHAIN_ID__", l2_chain_id)
+    gsub("__L1_SLOT_DURATION_OVERRIDE__", l1_slot_duration_override)
+    gsub("__L2_BUILDER_HTTP_PORT__", l2_builder_http_port)
+    gsub("__L2_BUILDER_FLASHBLOCKS_PORT__", l2_builder_flashblocks_port)
+
+    print
+  }
+  ' \
+  "$TEMPLATE_DIR/base.toml.template" \
+  >"$OUTPUT_DIR/base.toml"
+echo "Unified base chain config written to $OUTPUT_DIR/base.toml"
+
 # Verify the rollup.json has the correct L1 genesis hash
 ROLLUP_L1_HASH=$(jq -r '.genesis.l1.hash' "$OUTPUT_DIR/rollup.json")
 echo ""
@@ -218,6 +239,7 @@ echo "Files generated:"
 echo "  L2 genesis: $OUTPUT_DIR/genesis.json"
 echo "  Rollup config: $OUTPUT_DIR/rollup.json"
 echo "  Rollup config (conductor): $OUTPUT_DIR/rollup-conductor.json"
+echo "  Unified base chain config: $OUTPUT_DIR/base.toml"
 echo "  L1 addresses: $OUTPUT_DIR/l1-addresses.json"
 echo "  Builder P2P key: $OUTPUT_DIR/builder-p2p-key.txt"
 echo ""

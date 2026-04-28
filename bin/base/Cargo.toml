@@ -17,8 +17,38 @@ workspace = true
 
 [dependencies]
 # workspace
+base-bundle-extension.workspace = true
 base-cli-utils.workspace = true
+base-client-cli.workspace = true
 base-common-chains.workspace = true
+base-consensus-node.workspace = true
+base-consensus-rpc.workspace = true
+base-execution-chainspec.workspace = true
+base-execution-cli.workspace = true
+base-flashblocks.workspace = true
+base-flashblocks-node.workspace = true
+base-node-core.workspace = true
+base-node-runner.workspace = true
+base-txpool-rpc.workspace = true
+base-txpool-tracing.workspace = true
+
+# alloy
+alloy-chains.workspace = true
+alloy-genesis.workspace = true
+alloy-rpc-types-engine = { workspace = true, features = ["std"] }
+
+# common
+base-common-genesis = { workspace = true, features = ["serde", "std"] }
+
+# reth
+reth-db.workspace = true
+reth-node-builder.workspace = true
+reth-node-core.workspace = true
+reth-tasks.workspace = true
+
+# async
+tokio.workspace = true
+tokio-util.workspace = true
 
 # cli
 clap = { workspace = true, features = ["env"] }
@@ -26,10 +56,18 @@ clap = { workspace = true, features = ["env"] }
 # tracing
 tracing = { workspace = true, features = ["std"] }
 
+# metrics
+metrics-process = { workspace = true, features = ["metrics-rs"] }
+
 # misc
+dirs.workspace = true
 eyre.workspace = true
-serde = { workspace = true, features = ["derive"] }
 figment = { workspace = true, features = ["env", "toml"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+url.workspace = true
 
 [dev-dependencies]
+alloy-eips = { workspace = true, features = ["std"] }
+alloy-primitives.workspace = true
 figment = { workspace = true, features = ["test"] }

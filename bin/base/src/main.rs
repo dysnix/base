@@ -3,19 +3,21 @@
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
+#[cfg(not(unix))]
+compile_error!("the `base` binary currently supports only unix platforms");
+
 use clap::Parser;
 
 mod app;
 mod cli;
 mod config;
-
-use app::BaseApp;
-use cli::BaseCli;
+mod execution;
+mod unified;
 
 fn main() {
     base_cli_utils::init_common!();
 
-    if let Err(err) = BaseApp::new(BaseCli::parse()).run() {
+    if let Err(err) = app::BaseApp::new(cli::BaseCli::parse()).run() {
         eprintln!("Error: {err:?}");
         std::process::exit(1);
     }
