@@ -52,6 +52,7 @@ spin.workspace = true
 rstest.workspace = true
 proptest.workspace = true
 serde_json.workspace = true
+criterion.workspace = true
 base-common-chains.workspace = true
 base-common-rpc-types.workspace = true
 brotli = { workspace = true, features = ["std"] }
@@ -60,6 +61,10 @@ arbitrary = { workspace = true, features = ["derive"] }
 rand = { workspace = true, features = ["std", "std_rng"] }
 tracing-subscriber = { workspace = true, features = ["fmt"] }
 alloy-primitives = { workspace = true, features = ["arbitrary"] }
+
+[[bench]]
+name = "batch_reader"
+harness = false
 
 [features]
 default = [ "std" ]

@@ -421,3 +421,32 @@ Results:
 Next:
 - if this path is revisited again, inspect `BatchReader::decompress` and per-batch decode overhead for reusable scratch buffers or avoidable allocations, using the new component harness to verify whether any candidate actually moves the `~3.4 µs` decode floor.
 
+## 2026-04-28 09:15 UTC
+Focus: `base-protocol::BatchReader` raw-input ownership on the shared decode path used by batcher and consensus derivation.
+Hypothesis: `BatchReader::new` still stores raw channel bytes as `Vec<u8>`, so callers that already own `Bytes` pay an avoidable clone before decompression; switching `BatchReader` to hold `Bytes` directly and adding a side-by-side benchmark should eliminate that constructor copy and show whether decode throughput improves on larger multi-batch channels.
+Commands:
+- `cargo bench -p base-batcher-service --bench recent_txs decode_channel_components -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- edited `crates/consensus/protocol/src/batch/reader.rs` to store raw input as `Option<Bytes>` and accept `Into<Bytes>` in `BatchReader::new`
+- edited `crates/consensus/derive/src/stages/channel/channel_reader.rs` to pass owned channel bytes into `BatchReader::new`
+- added `crates/consensus/protocol/benches/batch_reader.rs` plus Criterion wiring in `crates/consensus/protocol/Cargo.toml`
+- `cargo bench -p base-protocol --bench batch_reader -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 20`
+- `cargo fmt --all`
+- `cargo test -p base-protocol batch_reader -- --nocapture`
+- `cargo test -p base-consensus-derive channel_reader -- --nocapture`
+- `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- `cargo clippy -p base-consensus-derive --tests --no-deps -- -D warnings`
+- extracted median `point_estimate` values from `target/criterion/protocol_batch_reader_*/*/*/base/estimates.json`
+Results:
+- changed `BatchReader` to retain owned raw input as `Bytes` instead of `Vec<u8>`, letting callers such as `ChannelReader` move channel payloads into the reader without an intermediate heap clone
+- added a new shared protocol benchmark that measures both the old `Bytes::to_vec()` constructor path and the new owned-`Bytes` path for constructor-only cost and full decode cost, using `1`-batch and `64`-batch synthetic channels derived from the existing `batch.hex` fixture
+- validation passed: focused protocol tests (`2 passed`), focused derive tests (`7 passed`), `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`, and `cargo clippy -p base-consensus-derive --tests --no-deps -- -D warnings`
+- constructor benchmark medians show the copy elimination clearly:
+  - `1` batch: baseline `Bytes::to_vec()` `8.045 µs` vs owned `Bytes` `5.96 ns`
+  - `64` batches: baseline `Bytes::to_vec()` `9.113 ms` vs owned `Bytes` `5.93 ns`
+- full decode benchmark medians show the copy matters most once the channel is larger:
+  - `1` batch: baseline `5.452 ms` vs owned `Bytes` `5.554 ms` (effectively noise / no durable win at this size)
+  - `64` batches: baseline `382.56 ms` vs owned `Bytes` `369.54 ms` (~`3.4%` lower median)
+- interpretation: the removed input clone is a large constructor-only win and a modest but measurable end-to-end win on larger multi-batch channels, which is consistent with decompression and batch decoding still dominating small ready-channel work
+Next:
+- if this shared decode path is revisited again, extend the new `base-protocol` bench with a decompression-only split (zlib vs brotli) so the next iteration can tell whether any remaining decode floor is in `decompress_*` itself or in per-batch RLP decoding after decompression.
+

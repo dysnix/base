@@ -69,8 +69,7 @@ where
                 RollupConfig::MAX_RLP_BYTES_PER_CHANNEL_BEDROCK
             };
 
-            self.next_batch =
-                Some(BatchReader::new(&channel[..], max_rlp_bytes_per_channel as usize));
+            self.next_batch = Some(BatchReader::new(channel, max_rlp_bytes_per_channel as usize));
             Metrics::pipeline_batch_reader_set().set(1);
         }
         Ok(())
