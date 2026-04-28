@@ -371,3 +371,26 @@ Results:
 Next:
 - if this startup-scan path is revisited again, use the new decode-density harness to test any drain/decode candidate directly; the next likely production opportunity is in channel decode or `Frame::parse_frames`, not in another touched-ID bookkeeping tweak
 
+## 2026-04-28 04:48 UTC
+Focus: `base-batcher-service` recent-tx startup scan decode path in `RecentTxScanner::decode_channel()`.
+Hypothesis: the decode path still clones concatenated channel frame data with `data.to_vec()` before constructing `BatchReader`; passing the owned `Bytes` directly should avoid one full payload copy per ready channel while preserving decoding semantics.
+Commands:
+- `cargo bench -p base-batcher-service --bench recent_txs process_block_decode_density -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- edited `crates/batcher/service/src/recent_txs.rs` to pass `channel.frame_data()` directly into `BatchReader::new`
+- `cargo fmt --all`
+- `cargo test -p base-batcher-service recent_txs -- --nocapture`
+- `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+- `cargo bench -p base-batcher-service --bench recent_txs process_block_decode_density -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- extracted median `point_estimate` values from `target/criterion/.../estimates.json` for before/after comparison
+Results:
+- changed `RecentTxScanner::decode_channel()` from `BatchReader::new(data.to_vec(), max_rlp)` to `BatchReader::new(data, max_rlp)`, removing an unnecessary `Bytes`→`Vec<u8>` clone before decompression while leaving all tests green
+- validation passed: `cargo test -p base-batcher-service recent_txs -- --nocapture` (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+- decode-density median results after the change (before → after):
+  - `0` ready channels: baseline full scan `284.11 µs` → `197.00 µs`; tracker+touched-only `107.05 µs` → `105.80 µs`
+  - `256` ready channels: baseline `711.99 µs` → `686.94 µs`; tracker+touched-only `588.78 µs` → `572.95 µs`
+  - `512` ready channels: baseline `1.2746 ms` → `1.1505 ms`; tracker+touched-only `1.0348 ms` → `1.0337 ms`
+  - `1024` ready channels: baseline `2.2045 ms` → `2.1306 ms`; tracker+touched-only `1.9483 ms` → `1.9690 ms`
+- the signal is modest and somewhat noisy, but the touched-only path stayed essentially flat or slightly better on three of four decode-density cases while the code simplification safely removes one per-channel buffer materialization from the hot decode path
+Next:
+- if this startup-scan path is revisited again, add a decode-only microbenchmark around `channel.frame_data()` + `BatchReader::next_batch()` so future work can isolate frame concatenation and decompression costs from touched-ID tracking and channel-map drain behavior.
+
