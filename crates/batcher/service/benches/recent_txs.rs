@@ -13,7 +13,7 @@ use base_common_genesis::{ChainGenesis, RollupConfig};
 use base_protocol::{
     Batch, BlockInfo, Channel, ChannelId, DERIVATION_VERSION_0, Frame, SingleBatch,
 };
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 const READY_CHANNEL_COUNT: usize = 4_096;
 const SPARSE_TOUCHED_CHANNEL_COUNT: usize = 64;
@@ -26,6 +26,8 @@ const READY_TRANSITION_CHANNEL_COUNT: usize = 1_024;
 const STAGGERED_READY_BLOCK_COUNT: usize = 4;
 const STAGGERED_READY_CHANNEL_COUNT: usize = 1_024;
 const MIXED_READY_BLOCK_COUNT: usize = 4;
+const DECODE_DENSITY_CHANNEL_COUNT: usize = 1_024;
+const DECODE_DENSITY_READY_CHANNEL_COUNTS: [usize; 4] = [0, 256, 512, DECODE_DENSITY_CHANNEL_COUNT];
 const FRONT_LOADED_READY_CHANNEL_COUNTS: [usize; STAGGERED_READY_BLOCK_COUNT] =
     [512, 256, 128, 128];
 const BACK_LOADED_READY_CHANNEL_COUNTS: [usize; STAGGERED_READY_BLOCK_COUNT] = [128, 128, 256, 512];
@@ -375,6 +377,50 @@ fn multi_block_cohort_ready_tx_payloads(
     );
 
     block_tx_payloads
+}
+
+fn prebuffered_decode_density_fixture(
+    channel_count: usize,
+    ready_channel_count: usize,
+) -> (HashMap<ChannelId, Channel>, Vec<Vec<u8>>) {
+    let block_info = BlockInfo::default();
+    let mut channels = HashMap::with_capacity(channel_count);
+    let mut tx_payloads = Vec::with_capacity(channel_count);
+
+    for index in 0..channel_count {
+        let channel_id = channel_id(index);
+        let encoded_batch = encode_single_batch(&SingleBatch {
+            timestamp: 1_010 + index as u64 * 2,
+            ..Default::default()
+        });
+        let total_frame_count = if index < ready_channel_count { 3 } else { 4 };
+        let frame_data_chunks = split_frame_data_across_blocks(&encoded_batch, total_frame_count);
+        let mut channel = Channel::new(channel_id, block_info);
+
+        for (frame_number, frame_data) in frame_data_chunks.iter().take(2).enumerate() {
+            channel
+                .add_frame(
+                    Frame {
+                        id: channel_id,
+                        number: frame_number as u16,
+                        data: frame_data.clone(),
+                        is_last: false,
+                    },
+                    block_info,
+                )
+                .expect("fixture frame must be accepted");
+        }
+
+        tx_payloads.push(encode_tx_frames_payload(&[Frame {
+            id: channel_id,
+            number: 2,
+            data: frame_data_chunks[2].clone(),
+            is_last: index < ready_channel_count,
+        }]));
+        channels.insert(channel_id, channel);
+    }
+
+    (channels, tx_payloads)
 }
 
 fn track_touched_channel_ids_with_vec(frame_channel_ids: &[ChannelId]) -> Vec<ChannelId> {
@@ -1461,6 +1507,70 @@ fn bench_recent_tx_process_blocks_touch_start_matched_volume(c: &mut Criterion) 
     group.finish();
 }
 
+fn bench_recent_tx_process_block_decode_density(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batcher_service/recent_txs/process_block_decode_density");
+    group.sample_size(15);
+
+    let rollup_config = test_rollup_config();
+
+    for ready_channel_count in DECODE_DENSITY_READY_CHANNEL_COUNTS {
+        group.bench_with_input(
+            BenchmarkId::new(
+                "baseline_vec_scan_all_prebuffered_touched_channels_ready_on_current_block",
+                ready_channel_count,
+            ),
+            &ready_channel_count,
+            |b, &ready_channel_count| {
+                b.iter_batched(
+                    || {
+                        prebuffered_decode_density_fixture(
+                            DECODE_DENSITY_CHANNEL_COUNT,
+                            ready_channel_count,
+                        )
+                    },
+                    |(mut channels, tx_payloads)| {
+                        black_box(process_block_with_vec_tracking_and_full_scan(
+                            black_box(&mut channels),
+                            black_box(&tx_payloads),
+                            black_box(&rollup_config),
+                        ));
+                        black_box(channels)
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new(
+                "tracker_touched_only_prebuffered_touched_channels_ready_on_current_block",
+                ready_channel_count,
+            ),
+            &ready_channel_count,
+            |b, &ready_channel_count| {
+                b.iter_batched(
+                    || {
+                        prebuffered_decode_density_fixture(
+                            DECODE_DENSITY_CHANNEL_COUNT,
+                            ready_channel_count,
+                        )
+                    },
+                    |(mut channels, tx_payloads)| {
+                        black_box(process_block_with_tracker_and_touched_only_drain(
+                            black_box(&mut channels),
+                            black_box(&tx_payloads),
+                            black_box(&rollup_config),
+                        ));
+                        black_box(channels)
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_recent_tx_ready_channel_lookup,
@@ -1474,5 +1584,6 @@ criterion_group!(
     bench_recent_tx_process_blocks_mixed_ready,
     bench_recent_tx_process_blocks_touch_start_sparsity,
     bench_recent_tx_process_blocks_touch_start_matched_volume,
+    bench_recent_tx_process_block_decode_density,
 );
 criterion_main!(benches);

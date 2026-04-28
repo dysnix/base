@@ -350,3 +350,24 @@ Results:
 Next:
 - if this startup-scan path is revisited again, add a benchmark that holds both block payload counts and touched-ID cardinality constant while varying ready-channel decode density, so the next experiment can decide whether any remaining optimization opportunity sits in touched-only draining, channel decode, or `Frame::parse_frames`
 
+## 2026-04-28 02:42 UTC
+Focus: `base-batcher-service` recent-tx startup scan decode-density benchmark coverage with constant touched-ID cardinality.
+Hypothesis: the matched-volume touch-start harness narrowed the survivor-heavy map effect, but it still left ambiguity about how much remaining variance comes from ready-channel decode versus drain bookkeeping; a prebuffered single-block fixture with fixed touched cardinality and payload count should isolate that crossover.
+Commands:
+- `cargo fmt --all`
+- `cargo bench -p base-batcher-service --bench recent_txs process_block_decode_density -- --warm-up-time 0.5 --measurement-time 1.0 --sample-size 15`
+- `cargo test -p base-batcher-service recent_txs -- --nocapture`
+- `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings`
+Results:
+- added benchmark-only coverage in `crates/batcher/service/benches/recent_txs.rs` for `process_block_decode_density`, using a new `prebuffered_decode_density_fixture` that starts `1024` touched channels with two frames already buffered and then replays one current-block frame per channel while varying how many touched channels become ready on that block (`0`, `256`, `512`, `1024`)
+- this fixture keeps touched-ID cardinality and current-block payload count constant, separating ready-channel decode cost from touched-only drain bookkeeping without changing production logic
+- validation passed: focused tests still pass (`8 passed`) and `cargo clippy -p base-batcher-service --tests --benches --no-deps -- -D warnings` passed
+- median benchmark results from Criterion `estimates.json`:
+  - `0` ready channels: baseline full scan `284.11 µs` vs tracker+touched-only `107.05 µs` (~`62.3%` lower)
+  - `256` ready channels: baseline `711.99 µs` vs tracker+touched-only `588.78 µs` (~`17.3%` lower)
+  - `512` ready channels: baseline `1.2746 ms` vs tracker+touched-only `1.0348 ms` (~`18.8%` lower)
+  - `1024` ready channels: baseline `2.2045 ms` vs tracker+touched-only `1.9483 ms` (~`11.6%` lower)
+- the new harness makes the crossover clearer: touched-only draining remains beneficial across the whole range, but the relative win shrinks as more touched channels finish and decode cost dominates more of the block budget
+Next:
+- if this startup-scan path is revisited again, use the new decode-density harness to test any drain/decode candidate directly; the next likely production opportunity is in channel decode or `Frame::parse_frames`, not in another touched-ID bookkeeping tweak
+
