@@ -17,6 +17,7 @@ reth-discv5.workspace = true
 reth-evm.workspace = true
 reth-tasks.workspace = true
 reth-db-api.workspace = true
+reth-ethereum-forks.workspace = true
 reth-network.workspace = true
 reth-tracing.workspace = true
 reth-rpc-api.workspace = true
@@ -56,6 +57,7 @@ revm = { workspace = true, features = [
 ] }
 
 # ethereum
+alloy-rlp.workspace = true
 alloy-consensus.workspace = true
 alloy-primitives.workspace = true
 base-common-chains.workspace = true

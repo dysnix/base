@@ -19,6 +19,9 @@ pub use args::TxpoolOrdering;
 pub mod engine;
 pub use engine::OpEngineTypes;
 
+mod disc_filter;
+pub use disc_filter::BaseDiscoveryFilter;
+
 pub mod node;
 pub use node::*;
 

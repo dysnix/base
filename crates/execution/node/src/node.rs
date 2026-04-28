@@ -1,6 +1,10 @@
 //! Base Node types config.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{
+    marker::PhantomData,
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
+    sync::Arc,
+};
 
 use alloy_consensus::BlockHeader;
 use alloy_primitives::{Address, B64, B256};
@@ -27,8 +31,8 @@ use base_execution_txpool::{
     BaseOrdering, BasePooledTransaction, BaseTransactionPool, OpPooledTx, OpTransactionValidator,
     TimestampedTransaction,
 };
-use reth_chainspec::{BaseFeeParams, ChainSpecProvider, EthChainSpec, Hardforks};
-use reth_discv5::NetworkStackId;
+use reth_chainspec::{BaseFeeParams, ChainSpecProvider, EthChainSpec};
+use reth_discv5::discv5::ListenConfig;
 use reth_evm::ConfigureEvm;
 use reth_network::{
     NetworkConfig, NetworkHandle, NetworkManager, NetworkPrimitives, PeersInfo,
@@ -65,7 +69,7 @@ use reth_trie_common::KeccakKeyHasher;
 use serde::de::DeserializeOwned;
 
 use crate::{
-    OpEngineApiBuilder, OpEngineTypes,
+    BaseDiscoveryFilter, OpEngineApiBuilder, OpEngineTypes,
     args::{RollupArgs, TxpoolOrdering},
     engine::OpEngineValidator,
 };
@@ -1066,7 +1070,7 @@ impl BaseNetworkBuilder {
         ctx: &BuilderContext<Node>,
     ) -> eyre::Result<NetworkConfig<Node::Provider, NetworkP>>
     where
-        Node: FullNodeTypes<Types: NodeTypes<ChainSpec: Hardforks>>,
+        Node: FullNodeTypes<Types: NodeTypes<ChainSpec = BaseChainSpec>>,
         NetworkP: NetworkPrimitives,
     {
         let disable_txpool_gossip = self.disable_txpool_gossip;
@@ -1081,6 +1085,17 @@ impl BaseNetworkBuilder {
                     builder = builder.disable_discv4_discovery();
                 }
                 if !args.discovery.disable_discovery {
+                    let discv5_addr_ipv4 = args.discovery.discv5_addr.or(match rlpx_socket {
+                        SocketAddr::V4(addr) => Some(*addr.ip()),
+                        SocketAddr::V6(_) => None,
+                    });
+                    let discv5_addr_ipv6 = args.discovery.discv5_addr_ipv6.or(match rlpx_socket {
+                        SocketAddr::V4(_) => None,
+                        SocketAddr::V6(addr) => Some(*addr.ip()),
+                    });
+
+                    BaseDiscoveryFilter::init_for_chain_spec(ctx.chain_spec().as_ref());
+
                     builder = builder.discovery_v5(
                         args.discovery
                             .discovery_v5_builder(
@@ -1091,7 +1106,29 @@ impl BaseNetworkBuilder {
                                     .or_else(|| ctx.chain_spec().bootnodes())
                                     .unwrap_or_default(),
                             )
-                            .must_not_include_keys(&[NetworkStackId::ETH, NetworkStackId::ETH2]),
+                            .add_enr_kv_pair(
+                                BaseDiscoveryFilter::ENR_KEY,
+                                BaseDiscoveryFilter::version_enr_value(),
+                            )
+                            .discv5_config(
+                                reth_discv5::discv5::ConfigBuilder::new(
+                                    ListenConfig::from_two_sockets(
+                                        discv5_addr_ipv4.map(|addr| {
+                                            SocketAddrV4::new(addr, args.discovery.discv5_port)
+                                        }),
+                                        discv5_addr_ipv6.map(|addr| {
+                                            SocketAddrV6::new(
+                                                addr,
+                                                args.discovery.discv5_port_ipv6,
+                                                0,
+                                                0,
+                                            )
+                                        }),
+                                    ),
+                                )
+                                .table_filter(BaseDiscoveryFilter::table_filter)
+                                .build(),
+                            ),
                     );
                 }
 
@@ -1111,7 +1148,7 @@ impl BaseNetworkBuilder {
 
 impl<Node, Pool> NetworkBuilder<Node, Pool> for BaseNetworkBuilder
 where
-    Node: FullNodeTypes<Types: NodeTypes<ChainSpec: Hardforks>>,
+    Node: FullNodeTypes<Types: NodeTypes<ChainSpec = BaseChainSpec>>,
     Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TxTy<Node::Types>>>
         + Unpin
         + 'static,
