@@ -54,6 +54,12 @@ pub const DEFAULT_MAX_ESTABLISHED_CONNECTIONS: u32 = 30;
 /// The default maximum number of established libp2p connections per peer.
 pub const DEFAULT_MAX_ESTABLISHED_CONNECTIONS_PER_PEER: u32 = 1;
 
+/// Domain tag for malformed snappy messages in gossip message IDs.
+const DOMAIN_INVALID_SNAPPY: [u8; 4] = [0x0, 0x0, 0x0, 0x0];
+
+/// Domain tag for valid snappy messages in gossip message IDs.
+const DOMAIN_VALID_SNAPPY: [u8; 4] = [0x1, 0x0, 0x0, 0x0];
+
 ////////////////////////////////////////////////////////////////////////////////////////////////
 // Duration Constants
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -167,6 +173,11 @@ pub fn default_config() -> Config {
 
 /// Computes the [`MessageId`] of a `gossipsub` message.
 ///
+/// The message ID is bound to the gossip topic, matching the OP Stack
+/// implementation. This prevents the global gossipsub duplicate cache from
+/// treating byte-identical payloads on different block-version topics as the
+/// same message.
+///
 /// Reject oversized snappy frames before allocating: `snap::raw::decompress_len`
 /// parses only the varu32 preamble and never allocates. Frames whose declared
 /// decoded size exceeds [`MAX_GOSSIP_SIZE`] are hashed under the invalid-snappy
@@ -176,26 +187,21 @@ fn compute_message_id(msg: &Message) -> MessageId {
     let id = match snap::raw::decompress_len(&msg.data) {
         Ok(declared) if declared > MAX_GOSSIP_SIZE => {
             warn!(target: "cfg", declared, max = MAX_GOSSIP_SIZE, "Rejecting oversized snappy message");
-            invalid_snappy_id(&msg.data)
+            invalid_snappy_id(msg)
         }
         Ok(_) => {
             let mut decoder = Decoder::new();
             decoder.decompress_vec(&msg.data).map_or_else(
                 |_| {
                     warn!(target: "cfg", "Failed to decompress message, using invalid snappy");
-                    invalid_snappy_id(&msg.data)
+                    invalid_snappy_id(msg)
                 },
-                |data| {
-                    let domain_valid_snappy: Vec<u8> = vec![0x1, 0x0, 0x0, 0x0];
-                    sha256([domain_valid_snappy.as_slice(), data.as_slice()].concat().as_slice())
-                        [..20]
-                        .to_vec()
-                },
+                |data| message_id_hash(msg, &DOMAIN_VALID_SNAPPY, &data),
             )
         }
         Err(_) => {
             warn!(target: "cfg", "Failed to read snappy preamble, using invalid snappy");
-            invalid_snappy_id(&msg.data)
+            invalid_snappy_id(msg)
         }
     };
 
@@ -203,9 +209,22 @@ fn compute_message_id(msg: &Message) -> MessageId {
 }
 
 /// Hash `data` under the invalid-snappy domain tag.
-fn invalid_snappy_id(data: &[u8]) -> Vec<u8> {
-    let domain_invalid_snappy: Vec<u8> = vec![0x0, 0x0, 0x0, 0x0];
-    sha256([domain_invalid_snappy.as_slice(), data].concat().as_slice())[..20].to_vec()
+fn invalid_snappy_id(msg: &Message) -> Vec<u8> {
+    message_id_hash(msg, &DOMAIN_INVALID_SNAPPY, &msg.data)
+}
+
+/// Hashes a gossip message ID preimage.
+fn message_id_hash(msg: &Message, domain: &[u8; 4], data: &[u8]) -> Vec<u8> {
+    let topic = msg.topic.as_str().as_bytes();
+    let topic_len = (topic.len() as u64).to_le_bytes();
+    let mut preimage =
+        Vec::with_capacity(domain.len() + topic_len.len() + topic.len() + data.len());
+    preimage.extend_from_slice(domain);
+    preimage.extend_from_slice(&topic_len);
+    preimage.extend_from_slice(topic);
+    preimage.extend_from_slice(data);
+
+    sha256(&preimage)[..20].to_vec()
 }
 
 #[cfg(test)]
@@ -241,8 +260,8 @@ mod tests {
         };
 
         let id = compute_message_id(&msg);
-        let hashed = sha256(&[&[0x0, 0x0, 0x0, 0x0], [1, 2, 3, 4, 5].as_slice()].concat());
-        assert_eq!(id.0, hashed[..20].to_vec());
+        let hashed = message_id_hash(&msg, &DOMAIN_INVALID_SNAPPY, &[1, 2, 3, 4, 5]);
+        assert_eq!(id.0, hashed);
     }
 
     #[test]
@@ -256,8 +275,27 @@ mod tests {
         };
 
         let id = compute_message_id(&msg);
-        let hashed = sha256(&[&[0x1, 0x0, 0x0, 0x0], [1, 2, 3, 4, 5].as_slice()].concat());
-        assert_eq!(id.0, hashed[..20].to_vec());
+        let hashed = message_id_hash(&msg, &DOMAIN_VALID_SNAPPY, &[1, 2, 3, 4, 5]);
+        assert_eq!(id.0, hashed);
+    }
+
+    #[test]
+    fn test_compute_message_id_includes_topic() {
+        let compressed = snap::raw::Encoder::new().compress_vec(&[1, 2, 3, 4, 5]).unwrap();
+        let msg_v3 = Message {
+            source: None,
+            data: compressed.clone(),
+            sequence_number: None,
+            topic: libp2p::gossipsub::TopicHash::from_raw("/optimism/8453/2/blocks"),
+        };
+        let msg_v4 = Message {
+            source: None,
+            data: compressed,
+            sequence_number: None,
+            topic: libp2p::gossipsub::TopicHash::from_raw("/optimism/8453/3/blocks"),
+        };
+
+        assert_ne!(compute_message_id(&msg_v3), compute_message_id(&msg_v4));
     }
 
     #[test]
@@ -275,7 +313,7 @@ mod tests {
         };
 
         let id = compute_message_id(&msg);
-        let expected = sha256(&[&[0x0, 0x0, 0x0, 0x0], bomb.as_slice()].concat())[..20].to_vec();
+        let expected = message_id_hash(&msg, &DOMAIN_INVALID_SNAPPY, &bomb);
         assert_eq!(id.0, expected, "oversized bomb must hash under the invalid-snappy domain");
     }
 }
