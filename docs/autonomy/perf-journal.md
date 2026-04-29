@@ -621,3 +621,29 @@ Results:
 - validation passed: `cargo test -p base-protocol batch_reader -- --nocapture` (`2 passed`) and `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
 Next:
 - if this decode path is revisited again, use the new `span_full_txs_components` harness to test whether `SpanBatchTransactionData::to_signed_tx` can avoid more temporary allocation or repeated setup, since it now accounts for the largest remaining share of the `full_txs()` floor.
+
+## 2026-04-29 02:40 UTC
+Focus: `base-protocol` span transaction reconstruction inside `SpanBatchTransactionData::to_signed_tx()`.
+Hypothesis: the `to_signed_tx()` hot path still converts fee fields from `U256` to `u128` by materializing 32-byte big-endian arrays and slicing the low 16 bytes; replacing those conversions with direct `u128::try_from(&U256)` calls might remove a little per-transaction copying in the dominant reconstruction stage.
+Commands:
+- `cargo bench -p base-protocol --bench batch_reader batch_decode_components -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- `cargo bench -p base-protocol --bench batch_reader span_full_txs_components -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- edited `crates/consensus/protocol/src/batch/tx_data/{legacy,eip2930,eip1559,eip7702}.rs` to replace manual `to_be_bytes::<32>()[16..]` conversions with `u128::try_from(&U256)`
+- `cargo bench -p base-protocol --bench batch_reader batch_decode_components -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- `cargo bench -p base-protocol --bench batch_reader span_full_txs_components -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- `cargo test -p base-protocol batch_reader -- --nocapture`
+- `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- reverted the production edits after the confirming run showed no improvement on the targeted end-to-end stage
+Results:
+- the before-change refresh on the current tree kept the prior hot-stage picture intact: `span_full_txs_only/64` stayed at `196.57 ms` median and `span_to_signed_tx_only/64` at `160.15 ms`, with `span_encode_2718_only/64` at `25.072 ms`
+- the attempted direct-conversion change did not improve the targeted reconstruction stage and slightly regressed the isolated component benches on this machine, so it was intentionally reverted and the branch is left clean
+- confirming after-change medians before revert:
+  - `span_full_txs_only/1`: `2.8439 ms` -> `2.8437 ms` (flat)
+  - `span_full_txs_only/64`: `196.57 ms` -> `196.61 ms` (flat)
+  - `span_to_signed_tx_only/1`: `2.3974 ms` -> `2.4117 ms` (~`0.6%` slower)
+  - `span_to_signed_tx_only/64`: `160.15 ms` -> `161.22 ms` (~`0.7%` slower)
+  - `span_encode_2718_exact_capacity_only/64`: `16.099 ms` -> `16.151 ms` (flat)
+- validation on the temporary experiment still passed: `cargo test -p base-protocol batch_reader -- --nocapture` (`2 passed`) and `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- PR status check: existing open PR remains `#2409` (`perf: optimize batcher hot paths`), so no new PR was opened
+Next:
+- revisit `SpanBatchTransactionData::to_signed_tx()` with a more structural candidate, likely reducing repeated cloning/setup inside typed transaction construction (`input`, access lists, or authorization lists) and validating it first against the existing `span_full_txs_components` harness before touching production code again.
