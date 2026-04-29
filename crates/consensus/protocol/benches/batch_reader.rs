@@ -3,7 +3,11 @@
 use std::hint::black_box;
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxEip2930, TxEip7702, TxEnvelope, TxLegacy};
-use alloy_eips::eip2718::Encodable2718;
+use alloy_eips::{
+    eip2718::Encodable2718,
+    eip2930::{AccessList, AccessListItem},
+    eip7702::SignedAuthorization,
+};
 use alloy_primitives::{Address, B256, Bytes, Signature, TxKind, U256, hex};
 use alloy_rlp::Decodable;
 use alloy_rpc_types_eth::Authorization;
@@ -19,6 +23,10 @@ use miniz_oxide::{
 
 const BATCH_COUNTS: [usize; 2] = [1, 64];
 const SYNTHETIC_SIGNATURE_HASH_TX_COUNT: usize = 1_024;
+const SYNTHETIC_SIGNATURE_HASH_RICH_INPUT_LEN: usize = 1_024;
+const SYNTHETIC_SIGNATURE_HASH_RICH_ACCESS_LIST_ENTRY_COUNT: usize = 4;
+const SYNTHETIC_SIGNATURE_HASH_RICH_STORAGE_KEYS_PER_ENTRY: usize = 4;
+const SYNTHETIC_SIGNATURE_HASH_RICH_AUTHORIZATION_COUNT: usize = 4;
 
 #[derive(Clone)]
 struct CompressionFixture {
@@ -61,6 +69,12 @@ enum TypedTransactionKind {
     Eip2930,
     Eip1559,
     Eip7702,
+}
+
+#[derive(Clone, Copy)]
+enum SyntheticSignatureHashShape {
+    Simple,
+    Rich,
 }
 
 fn decompressed_batch_fixture(batch_count: usize) -> Vec<u8> {
@@ -443,9 +457,75 @@ impl TypedTransactionKind {
     }
 }
 
+impl SyntheticSignatureHashShape {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Simple => "simple",
+            Self::Rich => "rich",
+        }
+    }
+}
+
+fn synthetic_signature_hash_input(seed: u8, shape: SyntheticSignatureHashShape) -> Bytes {
+    let input_len = match shape {
+        SyntheticSignatureHashShape::Simple => 32,
+        SyntheticSignatureHashShape::Rich => SYNTHETIC_SIGNATURE_HASH_RICH_INPUT_LEN,
+    };
+    let mut input = Vec::with_capacity(input_len);
+    for idx in 0..input_len {
+        input.push(seed.wrapping_add(idx as u8));
+    }
+    input.into()
+}
+
+fn synthetic_signature_hash_access_list(
+    seed: u8,
+    shape: SyntheticSignatureHashShape,
+) -> AccessList {
+    match shape {
+        SyntheticSignatureHashShape::Simple => AccessList::default(),
+        SyntheticSignatureHashShape::Rich => (0
+            ..SYNTHETIC_SIGNATURE_HASH_RICH_ACCESS_LIST_ENTRY_COUNT)
+            .map(|entry_idx| AccessListItem {
+                address: Address::from([seed.wrapping_add(entry_idx as u8 + 1); 20]),
+                storage_keys: (0..SYNTHETIC_SIGNATURE_HASH_RICH_STORAGE_KEYS_PER_ENTRY)
+                    .map(|key_idx| {
+                        B256::from([seed.wrapping_add((entry_idx * 16 + key_idx) as u8); 32])
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>()
+            .into(),
+    }
+}
+
+fn synthetic_signature_hash_authorization_list(
+    chain_id: u64,
+    to: Address,
+    nonce: u64,
+    shape: SyntheticSignatureHashShape,
+) -> Vec<SignedAuthorization> {
+    let authorization_count = match shape {
+        SyntheticSignatureHashShape::Simple => 1,
+        SyntheticSignatureHashShape::Rich => SYNTHETIC_SIGNATURE_HASH_RICH_AUTHORIZATION_COUNT,
+    };
+
+    (0..authorization_count)
+        .map(|offset| {
+            Authorization {
+                chain_id: U256::from(chain_id),
+                address: Address::from([to.as_slice()[0].wrapping_add(offset as u8); 20]),
+                nonce: nonce + offset as u64,
+            }
+            .into_signed(Signature::test_signature())
+        })
+        .collect()
+}
+
 fn synthetic_signature_hash_fixtures(
     tx_count: usize,
     chain_id: u64,
+    shape: SyntheticSignatureHashShape,
 ) -> Vec<(TypedTransactionKind, Vec<TypedTransactionFixture>)> {
     let mut legacy = Vec::with_capacity(tx_count);
     let mut eip2930 = Vec::with_capacity(tx_count);
@@ -458,7 +538,8 @@ fn synthetic_signature_hash_fixtures(
         let to = Address::from([seed; 20]);
         let value = U256::from(nonce + 1);
         let gas_limit = 21_000 + (nonce % 1_024);
-        let input = Bytes::from(vec![seed; 32]);
+        let input = synthetic_signature_hash_input(seed, shape);
+        let access_list = synthetic_signature_hash_access_list(seed, shape);
 
         legacy.push(TypedTransactionFixture::Legacy(TxLegacy {
             chain_id: Some(chain_id),
@@ -478,7 +559,7 @@ fn synthetic_signature_hash_fixtures(
             to: TxKind::Call(to),
             value,
             input: input.clone(),
-            access_list: Default::default(),
+            access_list: access_list.clone(),
         }));
 
         eip1559.push(TypedTransactionFixture::Eip1559(TxEip1559 {
@@ -490,11 +571,9 @@ fn synthetic_signature_hash_fixtures(
             to: TxKind::Call(to),
             value,
             input: input.clone(),
-            access_list: Default::default(),
+            access_list: access_list.clone(),
         }));
 
-        let authorization = Authorization { chain_id: U256::from(chain_id), address: to, nonce };
-        let signed_authorization = authorization.into_signed(Signature::test_signature());
         eip7702.push(TypedTransactionFixture::Eip7702(TxEip7702 {
             chain_id,
             nonce,
@@ -504,8 +583,10 @@ fn synthetic_signature_hash_fixtures(
             to,
             value,
             input,
-            access_list: Default::default(),
-            authorization_list: vec![signed_authorization],
+            access_list,
+            authorization_list: synthetic_signature_hash_authorization_list(
+                chain_id, to, nonce, shape,
+            ),
         }));
     }
 
@@ -1099,9 +1180,11 @@ fn bench_batch_reader_synthetic_signature_hash_by_tx_type(c: &mut Criterion) {
 
     let chain_id = RollupConfig::default().l2_chain_id.id();
 
-    for (kind, typed_transactions) in
-        synthetic_signature_hash_fixtures(SYNTHETIC_SIGNATURE_HASH_TX_COUNT, chain_id)
-    {
+    for (kind, typed_transactions) in synthetic_signature_hash_fixtures(
+        SYNTHETIC_SIGNATURE_HASH_TX_COUNT,
+        chain_id,
+        SyntheticSignatureHashShape::Simple,
+    ) {
         group.bench_with_input(
             BenchmarkId::new(
                 format!("{}_{}_txs", kind.label(), typed_transactions.len()),
@@ -1121,6 +1204,37 @@ fn bench_batch_reader_synthetic_signature_hash_by_tx_type(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_batch_reader_synthetic_signature_hash_shape_sensitivity(c: &mut Criterion) {
+    let mut group =
+        c.benchmark_group("protocol/batch_reader/synthetic_signature_hash_shape_sensitivity");
+    group.sample_size(10);
+
+    let chain_id = RollupConfig::default().l2_chain_id.id();
+
+    for shape in [SyntheticSignatureHashShape::Simple, SyntheticSignatureHashShape::Rich] {
+        for (kind, typed_transactions) in
+            synthetic_signature_hash_fixtures(SYNTHETIC_SIGNATURE_HASH_TX_COUNT, chain_id, shape)
+        {
+            group.bench_with_input(
+                BenchmarkId::new(
+                    format!("{}_{}_txs_{}", kind.label(), typed_transactions.len(), shape.label()),
+                    "synthetic",
+                ),
+                &typed_transactions,
+                |b, typed_transactions| {
+                    b.iter(|| {
+                        black_box(signature_hash_all_typed_transactions(black_box(
+                            typed_transactions.as_slice(),
+                        )));
+                    });
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_batch_reader_constructor,
@@ -1133,5 +1247,6 @@ criterion_group!(
     bench_batch_reader_span_signed_tx_components,
     bench_batch_reader_span_signature_hash_by_tx_type,
     bench_batch_reader_synthetic_signature_hash_by_tx_type,
+    bench_batch_reader_synthetic_signature_hash_shape_sensitivity,
 );
 criterion_main!(benches);

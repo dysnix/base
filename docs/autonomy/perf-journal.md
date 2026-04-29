@@ -756,3 +756,27 @@ Results:
 - branch/PR hygiene check: existing open PR remains `#2409` (`perf: optimize batcher hot paths`), so no new PR was opened
 Next:
 - if this decode path is revisited again, compare synthetic per-kind hash cost against richer payload/access-list/authorization-list shapes or a real EIP-7702 fixture so the next experiment can tell how much of the new gap is intrinsic to transaction type versus specific field population.
+
+## 2026-04-29 13:31 UTC
+Focus: `base-protocol` synthetic signature-hash shape sensitivity across richer transaction payloads and lists.
+Hypothesis: the previous same-cardinality synthetic benchmark used very small uniform transactions, so it likely understated the cost of typed payload fields; adding a second synthetic shape with large calldata plus populated access lists and authorization lists should show how much of the tx-type spread is intrinsic to the hash path versus fixture sparsity.
+Commands:
+- `cargo bench -p base-protocol --bench batch_reader synthetic_signature_hash_by_tx_type -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- edited `crates/consensus/protocol/benches/batch_reader.rs` to add `SyntheticSignatureHashShape`, richer synthetic fixture builders, and a new `protocol/batch_reader/synthetic_signature_hash_shape_sensitivity` Criterion group
+- `cargo fmt --all`
+- `cargo test -p base-protocol batch_reader -- --nocapture`
+- `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- `cargo bench -p base-protocol --bench batch_reader synthetic_signature_hash_shape_sensitivity -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- extracted medians from `target/criterion/protocol_batch_reader_synthetic_signature_hash_shape_sensitivity/*/*/new/estimates.json`
+- `gh pr list --head automation/perf-autopilot --state open`
+Results:
+- kept production logic unchanged and extended the synthetic hash harness with paired `simple` and `rich` shapes for all four typed transaction kinds; the `rich` shape uses `1024` bytes of calldata plus populated access lists for EIP-2930/EIP-1559 and four signed authorizations for EIP-7702
+- validation passed: `cargo test -p base-protocol batch_reader -- --nocapture` (`2 passed`) and `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- median signature-hash timings from the new shape-sensitivity group:
+  - simple shape: `legacy` `274.22 µs` (~`268 ns/tx`), `eip2930` `274.87 µs` (~`268 ns/tx`), `eip1559` `280.25 µs` (~`274 ns/tx`), `eip7702` `536.49 µs` (~`524 ns/tx`)
+  - rich shape: `legacy` `1.8150 ms` (~`1.77 µs/tx`), `eip2930` `3.0080 ms` (~`2.94 µs/tx`), `eip1559` `3.0030 ms` (~`2.93 µs/tx`), `eip7702` `3.8093 ms` (~`3.72 µs/tx`)
+- interpretation: the earlier synthetic ranking was directionally right about EIP-7702 being the slowest kind, but richer payloads magnify the typed-list overhead substantially; compared with the simple shape, rich synthetic transactions raise legacy hash cost by about `6.6x`, EIP-2930 by about `10.9x`, EIP-1559 by about `10.7x`, and EIP-7702 by about `7.1x`
+- this narrows the next optimization target: any future hash-focused work should treat access-list-bearing transactions and EIP-7702 separately instead of extrapolating from tiny uniform payloads alone
+- branch/PR hygiene check: existing open PR remains `#2409` (`perf: optimize batcher hot paths`), so no new PR was opened
+Next:
+- if this decode path is revisited again, add one more synthetic sweep that varies only one shape dimension at a time (calldata size vs access-list size vs authorization-list size) so the next experiment can attribute the rich-shape slowdown to a specific hashed field rather than the combined larger fixture.
