@@ -2,9 +2,10 @@
 
 use alloc::sync::Arc;
 
-use alloy_consensus::Block;
+use alloy_consensus::{Block, BlockHeader};
 use alloy_rpc_types_engine::PayloadError;
 use base_common_chains::Upgrades;
+use base_common_consensus::{HoloceneExtraData, JovianExtraData};
 use base_common_rpc_types_engine::{BasePayloadError, ExecutionData};
 use derive_more::{Constructor, Deref};
 use reth_payload_validator::{cancun, prague, shanghai};
@@ -77,6 +78,8 @@ where
         Err(PayloadError::BlockHash { execution: sealed_block.hash(), consensus: expected_hash })?;
     }
 
+    ensure_valid_extra_data(&chain_spec, sealed_block.header())?;
+
     shanghai::ensure_well_formed_fields(
         sealed_block.body(),
         chain_spec.is_shanghai_active_at_timestamp(sealed_block.timestamp),
@@ -95,4 +98,22 @@ where
     )?;
 
     Ok(sealed_block)
+}
+
+fn ensure_valid_extra_data<ChainSpec, H>(
+    chain_spec: &ChainSpec,
+    header: &H,
+) -> Result<(), PayloadError>
+where
+    ChainSpec: Upgrades,
+    H: BlockHeader,
+{
+    if chain_spec.is_jovian_active_at_timestamp(header.timestamp()) {
+        JovianExtraData::decode(header.extra_data())
+            .map_err(|_| PayloadError::ExtraData(header.extra_data().clone()))?;
+    } else if chain_spec.is_holocene_active_at_timestamp(header.timestamp()) {
+        HoloceneExtraData::decode(header.extra_data())
+            .map_err(|_| PayloadError::ExtraData(header.extra_data().clone()))?;
+    }
+    Ok(())
 }

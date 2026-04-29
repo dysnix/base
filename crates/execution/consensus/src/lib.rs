@@ -168,6 +168,9 @@ impl HeaderValidator<Header> for BaseBeaconConsensus {
 
         // validate header extra data for all networks post merge
         validate_header_extra_data(header, self.max_extra_data_size)?;
+        validation::validate_header_extra_data_base(&self.chain_spec, header).map_err(|error| {
+            ConsensusError::Other(format!("invalid optimism extraData: {error}"))
+        })?;
         validate_header_gas(header)?;
         validate_header_base_fee(header, &self.chain_spec)
     }

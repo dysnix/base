@@ -1,7 +1,7 @@
 use alloy_eips::eip1559::BaseFeeParams;
 use alloy_primitives::{B64, Bytes};
 
-use super::{EIP1559ParamError, encode_eip_1559_params};
+use super::{EIP1559ParamError, encode_eip_1559_params, validate_header_eip_1559_params};
 
 const VERSION_BYTE: u8 = 1;
 
@@ -33,11 +33,10 @@ impl JovianExtraData {
         let denominator: [u8; 4] = extra_data[1..5].try_into().expect("sufficient length");
         let elasticity: [u8; 4] = extra_data[5..9].try_into().expect("sufficient length");
         let min_base_fee: [u8; 8] = extra_data[9..17].try_into().expect("sufficient length");
-        Ok((
-            u32::from_be_bytes(elasticity),
-            u32::from_be_bytes(denominator),
-            u64::from_be_bytes(min_base_fee),
-        ))
+        let elasticity = u32::from_be_bytes(elasticity);
+        let denominator = u32::from_be_bytes(denominator);
+        validate_header_eip_1559_params(elasticity, denominator)?;
+        Ok((elasticity, denominator, u64::from_be_bytes(min_base_fee)))
     }
 
     /// Encodes the EIP-1559 parameters into Jovian `extra_data` bytes.
@@ -90,5 +89,29 @@ mod tests {
         let extra_data = [0u8; 8];
         let res = JovianExtraData::decode(&extra_data);
         assert_eq!(res.unwrap_err(), EIP1559ParamError::InvalidExtraDataLength);
+    }
+
+    #[test]
+    fn test_decode_rejects_zero_elasticity_with_nonzero_denominator() {
+        let extra_data =
+            Bytes::copy_from_slice(&[1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let res = JovianExtraData::decode(&extra_data).unwrap_err();
+        assert_eq!(res, EIP1559ParamError::InvalidEIP1559Params);
+    }
+
+    #[test]
+    fn test_decode_rejects_zero_denominator_with_nonzero_elasticity() {
+        let extra_data =
+            Bytes::copy_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let res = JovianExtraData::decode(&extra_data).unwrap_err();
+        assert_eq!(res, EIP1559ParamError::InvalidEIP1559Params);
+    }
+
+    #[test]
+    fn test_decode_rejects_zero_denominator_and_elasticity() {
+        let extra_data =
+            Bytes::copy_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let res = JovianExtraData::decode(&extra_data).unwrap_err();
+        assert_eq!(res, EIP1559ParamError::InvalidEIP1559Params);
     }
 }

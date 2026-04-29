@@ -26,6 +26,9 @@ pub enum EIP1559ParamError {
     /// Extra data is not the correct length.
     #[error("Extra data is not the correct length")]
     InvalidExtraDataLength,
+    /// Denominator and elasticity are invalid.
+    #[error("Invalid EIP-1559 denominator and elasticity")]
+    InvalidEIP1559Params,
     /// Minimum base fee must be None before Jovian.
     #[error("Minimum base fee must be None before Jovian")]
     MinBaseFeeMustBeNone,
@@ -57,8 +60,29 @@ fn encode_eip_1559_params(
         extra_data[5..9].copy_from_slice(&elasticity_multiplier.to_be_bytes());
     } else {
         let (elasticity, denominator) = HoloceneExtraData::decode_params(eip_1559_params);
+        validate_payload_eip_1559_params(elasticity, denominator)?;
         extra_data[1..5].copy_from_slice(&denominator.to_be_bytes());
         extra_data[5..9].copy_from_slice(&elasticity.to_be_bytes());
+    }
+    Ok(())
+}
+
+fn validate_payload_eip_1559_params(
+    elasticity: u32,
+    denominator: u32,
+) -> Result<(), EIP1559ParamError> {
+    if (elasticity == 0) != (denominator == 0) {
+        return Err(EIP1559ParamError::InvalidEIP1559Params);
+    }
+    Ok(())
+}
+
+fn validate_header_eip_1559_params(
+    elasticity: u32,
+    denominator: u32,
+) -> Result<(), EIP1559ParamError> {
+    if elasticity == 0 || denominator == 0 {
+        return Err(EIP1559ParamError::InvalidEIP1559Params);
     }
     Ok(())
 }
@@ -75,5 +99,16 @@ mod tests {
         let mut extra_data = [0u8; 8];
         let result = encode_eip_1559_params(B64::ZERO, BaseFeeParams::new(80, 60), &mut extra_data);
         assert_eq!(result.unwrap_err(), EIP1559ParamError::InvalidExtraDataLength);
+    }
+
+    #[test]
+    fn test_encode_eip_1559_params_rejects_mixed_zero_params() {
+        let mut extra_data = [0u8; 9];
+        let result = encode_eip_1559_params(
+            B64::from([0, 0, 0, 1, 0, 0, 0, 0]),
+            BaseFeeParams::new(80, 60),
+            &mut extra_data,
+        );
+        assert_eq!(result.unwrap_err(), EIP1559ParamError::InvalidEIP1559Params);
     }
 }

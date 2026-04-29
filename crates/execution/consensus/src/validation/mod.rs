@@ -10,7 +10,9 @@ use alloy_eips::Encodable2718;
 use alloy_primitives::{B256, Bloom, Bytes};
 use alloy_trie::EMPTY_ROOT_HASH;
 use base_common_chains::Upgrades;
-use base_common_consensus::DepositReceiptExt;
+use base_common_consensus::{
+    DepositReceiptExt, EIP1559ParamError, HoloceneExtraData, JovianExtraData,
+};
 use reth_consensus::ConsensusError;
 use reth_execution_types::BlockExecutionResult;
 use reth_primitives_traits::{BlockBody, GotExpected, receipt::gas_spent_by_transactions};
@@ -20,6 +22,22 @@ use crate::proof::calculate_receipt_root;
 
 fn should_trust_precomputed_receipt_root(chain_spec: &impl Upgrades, timestamp: u64) -> bool {
     chain_spec.is_canyon_active_at_timestamp(timestamp)
+}
+
+/// Ensures Base header extra data matches the active fork's expected format.
+pub fn validate_header_extra_data_base<H>(
+    chain_spec: impl Upgrades,
+    header: &H,
+) -> Result<(), EIP1559ParamError>
+where
+    H: BlockHeader,
+{
+    if chain_spec.is_jovian_active_at_timestamp(header.timestamp()) {
+        JovianExtraData::decode(header.extra_data())?;
+    } else if chain_spec.is_holocene_active_at_timestamp(header.timestamp()) {
+        HoloceneExtraData::decode(header.extra_data())?;
+    }
+    Ok(())
 }
 
 /// Ensures the block response data matches the header.
@@ -232,7 +250,7 @@ mod tests {
     use alloy_primitives::{Bloom, Bytes, b256, hex};
     use alloy_trie::root::ordered_trie_root_with_encoder;
     use base_common_chains::BaseUpgrade;
-    use base_common_consensus::{BaseReceipt, BaseTxEnvelope, DepositReceipt};
+    use base_common_consensus::{BaseReceipt, BaseTxEnvelope, DepositReceipt, JovianExtraData};
     use base_execution_chainspec::{BASE_SEPOLIA, BaseChainSpec};
     use reth_chainspec::{BaseFeeParams, EthChainSpec, ForkCondition};
 
@@ -325,7 +343,32 @@ mod tests {
     }
 
     #[test]
-    fn test_get_base_fee_holocene_extra_data_not_set() {
+    fn test_get_base_fee_holocene_transition_parent_extra_data_empty() {
+        let op_chain_spec = holocene_chainspec();
+        let parent = Header {
+            base_fee_per_gas: Some(1),
+            gas_used: 15763614,
+            gas_limit: 144000000,
+            timestamp: HOLOCENE_TIMESTAMP - BLOCK_TIME_SECONDS,
+            extra_data: Bytes::new(),
+            ..Default::default()
+        };
+        let base_fee = base_execution_chainspec::BaseChainSpec::next_block_base_fee(
+            &op_chain_spec,
+            &parent,
+            HOLOCENE_TIMESTAMP,
+        );
+        assert_eq!(
+            base_fee.unwrap(),
+            op_chain_spec
+                .inner
+                .next_block_base_fee(&parent, HOLOCENE_TIMESTAMP)
+                .unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn test_get_base_fee_holocene_zero_extra_data_rejected() {
         let op_chain_spec = holocene_chainspec();
         let parent = Header {
             base_fee_per_gas: Some(1),
@@ -340,10 +383,7 @@ mod tests {
             &parent,
             HOLOCENE_TIMESTAMP + 5,
         );
-        assert_eq!(
-            base_fee.unwrap(),
-            op_chain_spec.next_block_base_fee(&parent, 0).unwrap_or_default()
-        );
+        assert_eq!(base_fee, None);
     }
 
     #[test]
@@ -454,13 +494,12 @@ mod tests {
         const CURR_BASE_FEE: u64 = 1;
         const MIN_BASE_FEE: u64 = 10;
 
-        let mut extra_data = Vec::new();
-        extra_data.push(JOVIAN_EXTRA_DATA_VERSION_BYTE);
-        // eip1559 params
-        extra_data.append(&mut [0_u8; 8].to_vec());
-        // min base fee
-        extra_data.append(&mut MIN_BASE_FEE.to_be_bytes().to_vec());
-        let extra_data = Bytes::from(extra_data);
+        let extra_data = JovianExtraData::encode(
+            Default::default(),
+            BaseFeeParams::base_sepolia(),
+            MIN_BASE_FEE,
+        )
+        .unwrap();
 
         let op_chain_spec = jovian_chainspec();
         let parent = Header {
@@ -484,13 +523,12 @@ mod tests {
     fn test_jovian_min_base_fee_cannot_decrease() {
         const MIN_BASE_FEE: u64 = 10;
 
-        let mut extra_data = Vec::new();
-        extra_data.push(JOVIAN_EXTRA_DATA_VERSION_BYTE);
-        // eip1559 params
-        extra_data.append(&mut [0_u8; 8].to_vec());
-        // min base fee
-        extra_data.append(&mut MIN_BASE_FEE.to_be_bytes().to_vec());
-        let extra_data = Bytes::from(extra_data);
+        let extra_data = JovianExtraData::encode(
+            Default::default(),
+            BaseFeeParams::base_sepolia(),
+            MIN_BASE_FEE,
+        )
+        .unwrap();
 
         let op_chain_spec = jovian_chainspec();
 
@@ -531,13 +569,12 @@ mod tests {
     fn test_jovian_base_fee_can_decrease_if_above_min_base_fee() {
         const MIN_BASE_FEE: u64 = 10;
 
-        let mut extra_data = Vec::new();
-        extra_data.push(JOVIAN_EXTRA_DATA_VERSION_BYTE);
-        // eip1559 params
-        extra_data.append(&mut [0_u8; 8].to_vec());
-        // min base fee
-        extra_data.append(&mut MIN_BASE_FEE.to_be_bytes().to_vec());
-        let extra_data = Bytes::from(extra_data);
+        let extra_data = JovianExtraData::encode(
+            Default::default(),
+            BaseFeeParams::base_sepolia(),
+            MIN_BASE_FEE,
+        )
+        .unwrap();
 
         let op_chain_spec = jovian_chainspec();
 
