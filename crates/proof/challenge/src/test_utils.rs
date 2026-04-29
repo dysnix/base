@@ -166,6 +166,10 @@ pub struct MockAggregateVerifier {
     /// Per-address game state lookup, wrapped in a `Mutex` for interior
     /// mutability in multi-step tests.
     pub games: Mutex<HashMap<Address, MockGameState>>,
+    /// Per-address `INTERMEDIATE_BLOCK_INTERVAL` overrides.
+    pub intermediate_block_intervals: Mutex<HashMap<Address, u64>>,
+    /// Addresses passed to `read_intermediate_block_interval`.
+    pub intermediate_block_interval_reads: Mutex<Vec<Address>>,
     /// Addresses passed to `bond_recipient`, used by tests that assert polling
     /// avoids redundant lifecycle reads.
     pub bond_recipient_reads: Mutex<Vec<Address>>,
@@ -173,8 +177,13 @@ pub struct MockAggregateVerifier {
 
 impl MockAggregateVerifier {
     /// Creates a new mock verifier from a pre-built game state map.
-    pub const fn new(games: HashMap<Address, MockGameState>) -> Self {
-        Self { games: Mutex::new(games), bond_recipient_reads: Mutex::new(Vec::new()) }
+    pub fn new(games: HashMap<Address, MockGameState>) -> Self {
+        Self {
+            games: Mutex::new(games),
+            intermediate_block_intervals: Mutex::new(HashMap::new()),
+            intermediate_block_interval_reads: Mutex::new(Vec::new()),
+            bond_recipient_reads: Mutex::new(Vec::new()),
+        }
     }
 
     /// Updates the state for a specific game address.
@@ -183,6 +192,21 @@ impl MockAggregateVerifier {
     /// state changes (e.g. marking a game as resolved after proof submission).
     pub fn update_game(&self, address: Address, state: MockGameState) {
         self.games.lock().unwrap().insert(address, state);
+    }
+
+    /// Sets the `INTERMEDIATE_BLOCK_INTERVAL` returned for an address.
+    pub fn set_intermediate_block_interval(&self, address: Address, interval: u64) {
+        self.intermediate_block_intervals.lock().unwrap().insert(address, interval);
+    }
+
+    /// Returns how many times `read_intermediate_block_interval` was called for an address.
+    pub fn intermediate_block_interval_read_count(&self, address: Address) -> usize {
+        self.intermediate_block_interval_reads
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|&&read_address| read_address == address)
+            .count()
     }
 
     /// Returns how many times `bond_recipient` was read for a game.
@@ -241,9 +265,10 @@ impl AggregateVerifierClient for MockAggregateVerifier {
 
     async fn read_intermediate_block_interval(
         &self,
-        _impl_address: Address,
+        address: Address,
     ) -> Result<u64, ContractError> {
-        Ok(5)
+        self.intermediate_block_interval_reads.lock().unwrap().push(address);
+        Ok(*self.intermediate_block_intervals.lock().unwrap().get(&address).unwrap_or(&5))
     }
 
     async fn intermediate_output_roots(

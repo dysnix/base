@@ -136,8 +136,9 @@ pub struct GameScanner {
     factory_client: Arc<dyn DisputeGameFactoryClient>,
     verifier_client: Arc<dyn AggregateVerifierClient>,
     config: ScannerConfig,
-    /// Cache of `game_type → intermediate_block_interval` to avoid repeated RPC calls.
-    interval_cache: Mutex<HashMap<u32, u64>>,
+    /// Cache of `game_proxy → intermediate_block_interval` to avoid repeated RPC calls while
+    /// preserving the interval used by each game's implementation.
+    interval_cache: Mutex<HashMap<Address, u64>>,
 }
 
 impl std::fmt::Debug for GameScanner {
@@ -257,7 +258,7 @@ impl GameScanner {
                 )
                 .map_err(Into::into)
             },
-            self.resolve_intermediate_block_interval(factory.game_type),
+            self.resolve_intermediate_block_interval(factory.proxy),
         )?;
 
         Ok(Some(CandidateGame {
@@ -333,35 +334,76 @@ impl GameScanner {
         }
     }
 
-    /// Resolves the intermediate block interval for a game type, using a cache
-    /// to avoid repeated RPC calls for the same type.
-    async fn resolve_intermediate_block_interval(&self, game_type: u32) -> Result<u64> {
+    /// Resolves the intermediate block interval for a game.
+    ///
+    /// The interval is read from the game proxy, not the factory's current implementation for the
+    /// game type, because governance can replace the factory implementation while older in-progress
+    /// games still delegate to the implementation they were created from.
+    async fn resolve_intermediate_block_interval(&self, game_address: Address) -> Result<u64> {
         {
             let cache = self.interval_cache.lock().expect("interval_cache lock poisoned");
-            if let Some(&interval) = cache.get(&game_type) {
+            if let Some(&interval) = cache.get(&game_address) {
                 return Ok(interval);
             }
         }
 
-        let impl_address = self.factory_client.game_impls(game_type).await?;
-        if impl_address == Address::ZERO {
-            return Err(eyre::eyre!(
-                "no game implementation registered in DisputeGameFactory for game type {game_type}"
-            ));
-        }
-
-        let interval = self.verifier_client.read_intermediate_block_interval(impl_address).await?;
+        let interval = self.verifier_client.read_intermediate_block_interval(game_address).await?;
 
         debug!(
-            game_type = game_type,
+            game_address = %game_address,
             interval = interval,
-            impl_address = %impl_address,
             "resolved intermediate block interval"
         );
 
         let mut cache = self.interval_cache.lock().expect("interval_cache lock poisoned");
-        cache.insert(game_type, interval);
+        cache.insert(game_address, interval);
 
         Ok(interval)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use alloy_primitives::Address;
+
+    use super::{GameScanner, ScannerConfig};
+    use crate::test_utils::{
+        MockAggregateVerifier, MockDisputeGameFactory, addr, factory_game, mock_state,
+    };
+
+    #[tokio::test]
+    async fn scanner_reads_interval_from_each_game_proxy() {
+        let game_type = 1;
+
+        let factory = Arc::new(MockDisputeGameFactory {
+            games: vec![factory_game(0, game_type), factory_game(1, game_type)],
+        });
+
+        let mut verifier_games = HashMap::new();
+        verifier_games.insert(addr(0), mock_state(0, Address::ZERO, 100));
+        verifier_games.insert(addr(1), mock_state(0, Address::ZERO, 200));
+
+        let verifier = Arc::new(MockAggregateVerifier::new(verifier_games));
+        verifier.set_intermediate_block_interval(addr(0), 10);
+        verifier.set_intermediate_block_interval(addr(1), 30);
+
+        let scanner = GameScanner::new(
+            factory.clone(),
+            verifier.clone(),
+            ScannerConfig { lookback_games: 1000 },
+        );
+
+        let first = scanner.evaluate_game(0).await.unwrap().unwrap();
+        assert_eq!(first.intermediate_block_interval, 10);
+
+        let cached = scanner.evaluate_game(0).await.unwrap().unwrap();
+        assert_eq!(cached.intermediate_block_interval, 10);
+        assert_eq!(verifier.intermediate_block_interval_read_count(addr(0)), 1);
+
+        let after_upgrade = scanner.evaluate_game(1).await.unwrap().unwrap();
+        assert_eq!(after_upgrade.intermediate_block_interval, 30);
+        assert_eq!(verifier.intermediate_block_interval_read_count(addr(1)), 1);
     }
 }
