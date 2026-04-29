@@ -14,7 +14,9 @@ pub struct EncoderConfig {
 
     /// Maximum byte size of each output frame when draining a closed channel.
     ///
-    /// Defaults to `target_frame_size`. Set smaller to force multi-frame output
+    /// Blob DA reserves one byte for the derivation-version prefix before the
+    /// serialized frame bytes, so the blob default is one byte smaller than
+    /// `target_frame_size`. Set smaller to force multi-frame output
     /// (e.g. in tests that exercise partial-channel submission and channel timeouts).
     pub max_frame_size: usize,
 
@@ -95,7 +97,7 @@ impl Default for EncoderConfig {
     fn default() -> Self {
         Self {
             target_frame_size: 130_044,
-            max_frame_size: 130_044,
+            max_frame_size: Self::MAX_BLOB_FRAME_SIZE,
             max_channel_duration: 2,
             sub_safety_margin: 0,
             target_num_frames: 1,
@@ -108,6 +110,17 @@ impl Default for EncoderConfig {
 }
 
 impl EncoderConfig {
+    /// Maximum number of bytes that can be encoded into one blob payload.
+    pub const BLOB_MAX_DATA_SIZE: usize = (4 * 31 + 3) * 1024 - 4;
+
+    /// Size of the derivation-version prefix prepended to each blob payload.
+    pub const BLOB_DERIVATION_PREFIX_SIZE: usize = 1;
+
+    /// Largest serialized frame that can fit in one blob after reserving the
+    /// derivation-version prefix.
+    pub const MAX_BLOB_FRAME_SIZE: usize =
+        Self::BLOB_MAX_DATA_SIZE - Self::BLOB_DERIVATION_PREFIX_SIZE;
+
     /// Validate the configuration, returning an error if any constraint is violated.
     ///
     /// This should be called at service startup before constructing a
@@ -124,6 +137,12 @@ impl EncoderConfig {
         if matches!(self.da_type, DaType::Calldata) && self.target_num_frames != 1 {
             return Err(EncoderConfigError::CalldataRequiresSingleFrame {
                 target_num_frames: self.target_num_frames,
+            });
+        }
+        if matches!(self.da_type, DaType::Blob) && self.max_frame_size > Self::MAX_BLOB_FRAME_SIZE {
+            return Err(EncoderConfigError::BlobFrameSizeTooLarge {
+                max_frame_size: self.max_frame_size,
+                max_blob_frame_size: Self::MAX_BLOB_FRAME_SIZE,
             });
         }
         if self.approx_compr_ratio <= 0.0 || self.approx_compr_ratio > 1.0 {
@@ -188,6 +207,18 @@ pub enum EncoderConfigError {
         /// The configured target number of frames.
         target_num_frames: usize,
     },
+    /// `da_type == DaType::Blob` but `max_frame_size` leaves no room for the
+    /// derivation-version prefix.
+    #[error(
+        "blob DA max_frame_size ({max_frame_size}) must be at most \
+         {max_blob_frame_size} to leave room for the derivation-version prefix"
+    )]
+    BlobFrameSizeTooLarge {
+        /// The configured maximum frame size.
+        max_frame_size: usize,
+        /// The maximum frame size that leaves room for the derivation-version prefix.
+        max_blob_frame_size: usize,
+    },
     /// `approx_compr_ratio <= 0.0 || approx_compr_ratio > 1.0`.
     ///
     /// A ratio ≤ 0.0 causes `compressed_estimate` to always be 0, so the span
@@ -234,6 +265,18 @@ mod tests {
         EncoderConfig { sub_safety_margin, max_channel_duration, ..EncoderConfig::default() }
     }
 
+    #[test]
+    fn default_blob_max_frame_size_reserves_derivation_prefix() {
+        let cfg = EncoderConfig::default();
+
+        assert_eq!(cfg.target_frame_size, EncoderConfig::BLOB_MAX_DATA_SIZE);
+        assert_eq!(cfg.max_frame_size, EncoderConfig::MAX_BLOB_FRAME_SIZE);
+        assert_eq!(
+            cfg.max_frame_size + EncoderConfig::BLOB_DERIVATION_PREFIX_SIZE,
+            EncoderConfig::BLOB_MAX_DATA_SIZE
+        );
+    }
+
     #[rstest]
     #[case(0, 2)] // zero margin: always valid
     #[case(1, 2)] // one below duration
@@ -259,6 +302,36 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains(&sub_safety_margin.to_string()));
         assert!(msg.contains(&max_channel_duration.to_string()));
+    }
+
+    #[test]
+    fn validate_rejects_blob_frame_size_that_leaves_no_prefix_room() {
+        let cfg = EncoderConfig {
+            max_frame_size: EncoderConfig::BLOB_MAX_DATA_SIZE,
+            ..EncoderConfig::default()
+        };
+
+        let err = cfg.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            EncoderConfigError::BlobFrameSizeTooLarge {
+                max_frame_size,
+                max_blob_frame_size,
+            } if max_frame_size == EncoderConfig::BLOB_MAX_DATA_SIZE
+                && max_blob_frame_size == EncoderConfig::MAX_BLOB_FRAME_SIZE
+        ));
+        assert!(err.to_string().contains("derivation-version prefix"));
+    }
+
+    #[test]
+    fn validate_allows_calldata_frame_size_without_blob_prefix_room() {
+        let cfg = EncoderConfig {
+            da_type: DaType::Calldata,
+            max_frame_size: EncoderConfig::BLOB_MAX_DATA_SIZE,
+            ..EncoderConfig::default()
+        };
+
+        assert!(cfg.validate().is_ok());
     }
 
     #[rstest]
