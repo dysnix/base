@@ -6,6 +6,7 @@ use alloy_consensus::{SignableTransaction, TxEip1559, TxEip2930, TxEip7702, TxEn
 use alloy_eips::eip2718::Encodable2718;
 use alloy_primitives::{Address, B256, Bytes, Signature, TxKind, U256, hex};
 use alloy_rlp::Decodable;
+use alloy_rpc_types_eth::Authorization;
 use base_common_genesis::{HardForkConfig, RollupConfig};
 use base_protocol::{
     Batch, BatchReader, BatchType, Brotli, RawSpanBatch, SpanBatchTransactionData,
@@ -17,6 +18,7 @@ use miniz_oxide::{
 };
 
 const BATCH_COUNTS: [usize; 2] = [1, 64];
+const SYNTHETIC_SIGNATURE_HASH_TX_COUNT: usize = 1_024;
 
 #[derive(Clone)]
 struct CompressionFixture {
@@ -439,6 +441,80 @@ impl TypedTransactionKind {
             Self::Eip7702 => "eip7702",
         }
     }
+}
+
+fn synthetic_signature_hash_fixtures(
+    tx_count: usize,
+    chain_id: u64,
+) -> Vec<(TypedTransactionKind, Vec<TypedTransactionFixture>)> {
+    let mut legacy = Vec::with_capacity(tx_count);
+    let mut eip2930 = Vec::with_capacity(tx_count);
+    let mut eip1559 = Vec::with_capacity(tx_count);
+    let mut eip7702 = Vec::with_capacity(tx_count);
+
+    for idx in 0..tx_count {
+        let nonce = idx as u64;
+        let seed = ((idx % u8::MAX as usize) + 1) as u8;
+        let to = Address::from([seed; 20]);
+        let value = U256::from(nonce + 1);
+        let gas_limit = 21_000 + (nonce % 1_024);
+        let input = Bytes::from(vec![seed; 32]);
+
+        legacy.push(TypedTransactionFixture::Legacy(TxLegacy {
+            chain_id: Some(chain_id),
+            nonce,
+            gas_price: 1_000_000_000u128 + idx as u128,
+            gas_limit,
+            to: TxKind::Call(to),
+            value,
+            input: input.clone(),
+        }));
+
+        eip2930.push(TypedTransactionFixture::Eip2930(TxEip2930 {
+            chain_id,
+            nonce,
+            gas_price: 1_000_000_000u128 + idx as u128,
+            gas_limit,
+            to: TxKind::Call(to),
+            value,
+            input: input.clone(),
+            access_list: Default::default(),
+        }));
+
+        eip1559.push(TypedTransactionFixture::Eip1559(TxEip1559 {
+            chain_id,
+            nonce,
+            max_fee_per_gas: 3_000_000_000u128 + idx as u128,
+            max_priority_fee_per_gas: 1_000_000_000u128 + idx as u128,
+            gas_limit,
+            to: TxKind::Call(to),
+            value,
+            input: input.clone(),
+            access_list: Default::default(),
+        }));
+
+        let authorization = Authorization { chain_id: U256::from(chain_id), address: to, nonce };
+        let signed_authorization = authorization.into_signed(Signature::test_signature());
+        eip7702.push(TypedTransactionFixture::Eip7702(TxEip7702 {
+            chain_id,
+            nonce,
+            max_fee_per_gas: 3_000_000_000u128 + idx as u128,
+            max_priority_fee_per_gas: 1_000_000_000u128 + idx as u128,
+            gas_limit,
+            to,
+            value,
+            input,
+            access_list: Default::default(),
+            authorization_list: vec![signed_authorization],
+        }));
+    }
+
+    vec![
+        (TypedTransactionKind::Legacy, legacy),
+        (TypedTransactionKind::Eip2930, eip2930),
+        (TypedTransactionKind::Eip1559, eip1559),
+        (TypedTransactionKind::Eip7702, eip7702),
+    ]
 }
 
 fn signature_hash_all_typed_transactions(typed_transactions: &[TypedTransactionFixture]) -> usize {
@@ -1017,6 +1093,34 @@ fn bench_batch_reader_span_signature_hash_by_tx_type(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_batch_reader_synthetic_signature_hash_by_tx_type(c: &mut Criterion) {
+    let mut group = c.benchmark_group("protocol/batch_reader/synthetic_signature_hash_by_tx_type");
+    group.sample_size(20);
+
+    let chain_id = RollupConfig::default().l2_chain_id.id();
+
+    for (kind, typed_transactions) in
+        synthetic_signature_hash_fixtures(SYNTHETIC_SIGNATURE_HASH_TX_COUNT, chain_id)
+    {
+        group.bench_with_input(
+            BenchmarkId::new(
+                format!("{}_{}_txs", kind.label(), typed_transactions.len()),
+                "synthetic",
+            ),
+            &typed_transactions,
+            |b, typed_transactions| {
+                b.iter(|| {
+                    black_box(signature_hash_all_typed_transactions(black_box(
+                        typed_transactions.as_slice(),
+                    )));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_batch_reader_constructor,
@@ -1028,5 +1132,6 @@ criterion_group!(
     bench_batch_reader_span_full_txs_components,
     bench_batch_reader_span_signed_tx_components,
     bench_batch_reader_span_signature_hash_by_tx_type,
+    bench_batch_reader_synthetic_signature_hash_by_tx_type,
 );
 criterion_main!(benches);

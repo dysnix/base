@@ -730,3 +730,29 @@ Results:
 - branch/PR hygiene check: existing open PR remains `#2409` (`perf: optimize batcher hot paths`), so no new PR was opened
 Next:
 - if this decode path is revisited again, either add a fixture with meaningful EIP-7702 coverage or inspect whether legacy/EIP-2930 `signature_hash()` paths can be optimized or replaced by a cheaper safe construction in the span decode flow before attempting any production changes.
+
+## 2026-04-29 11:20 UTC
+Focus: `base-protocol` signature-hash benchmark coverage for EIP-7702 and tx-type apples-to-apples comparisons.
+Hypothesis: the existing `span_signature_hash_by_tx_type` fixture is useful for real mix analysis but cannot measure EIP-7702 because `batch.hex` contains none; adding a synthetic same-cardinality tx-type benchmark should close that coverage gap and reveal whether the earlier per-tx ordering was mostly fixture-shape dependent.
+Commands:
+- `cargo bench -p base-protocol --bench batch_reader span_signature_hash_by_tx_type -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- edited `crates/consensus/protocol/benches/batch_reader.rs` to add synthetic typed-transaction fixtures plus a new `protocol/batch_reader/synthetic_signature_hash_by_tx_type` Criterion group
+- `cargo fmt --all`
+- `cargo test -p base-protocol batch_reader -- --nocapture`
+- `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- `cargo bench -p base-protocol --bench batch_reader synthetic_signature_hash_by_tx_type -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- extracted medians from `target/criterion/protocol_batch_reader_synthetic_signature_hash_by_tx_type/*/*/new/estimates.json`
+- `gh pr list --head automation/perf-autopilot --state open`
+Results:
+- refreshed the existing fixture-backed hash benchmark before editing the bench file; it still measured only legacy, EIP-2930, and EIP-1559 because `batch.hex` contains no EIP-7702 transactions, confirming the coverage gap from the prior run
+- added benchmark-only synthetic coverage that builds `1024` typed transactions per kind (`legacy`, `eip2930`, `eip1559`, `eip7702`) with the same cardinality and simple uniform payload shape, leaving production logic unchanged
+- validation passed: `cargo test -p base-protocol batch_reader -- --nocapture` (`2 passed`) and `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- median synthetic signature-hash timings from Criterion `estimates.json`:
+  - `legacy_1024_txs/synthetic`: `273.52 µs` total, about `267 ns/tx`
+  - `eip2930_1024_txs/synthetic`: `272.97 µs` total, about `267 ns/tx`
+  - `eip1559_1024_txs/synthetic`: `307.85 µs` total, about `301 ns/tx`
+  - `eip7702_1024_txs/synthetic`: `525.64 µs` total, about `513 ns/tx`
+- interpretation: the earlier fixture-backed ranking was heavily influenced by the real span fixture mix and transaction shapes; under matched synthetic cardinality, EIP-7702 hashing is the most expensive of the four measured kinds while legacy and EIP-2930 are effectively tied and EIP-1559 sits modestly above them
+- branch/PR hygiene check: existing open PR remains `#2409` (`perf: optimize batcher hot paths`), so no new PR was opened
+Next:
+- if this decode path is revisited again, compare synthetic per-kind hash cost against richer payload/access-list/authorization-list shapes or a real EIP-7702 fixture so the next experiment can tell how much of the new gap is intrinsic to transaction type versus specific field population.
