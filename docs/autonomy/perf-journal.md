@@ -675,3 +675,30 @@ Results:
 - branch/PR hygiene check: `git status` is clean after revert and the existing open PR is still `#2409`, so there was nothing to commit or push this run
 Next:
 - avoid more ownership-plumbing experiments in `full_txs()` until a deeper component harness proves where the remaining `span_to_signed_tx_only` time is really spent; the next best target is a finer split inside signed transaction construction (for example signature-hash generation versus typed-transaction assembly per tx kind) so future edits can attack the dominant substage directly.
+
+## 2026-04-29 06:57 UTC
+Focus: `base-protocol` span signed-transaction construction decomposition inside `SpanBatchTransactionData::to_signed_tx()`.
+Hypothesis: the remaining `span_to_signed_tx_only` floor may not be in transaction field assembly at all; a deeper benchmark that separates typed-transaction construction from `signature_hash()` generation should show whether another production edit is justified or whether hashing already dominates the stage.
+Commands:
+- `cargo bench -p base-protocol --bench batch_reader span_full_txs_components -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- edited `crates/consensus/protocol/benches/batch_reader.rs` to add a new `protocol/batch_reader/span_signed_tx_components` Criterion group with `span_build_typed_tx_only` and `span_signature_hash_only` fixtures alongside the existing `span_to_signed_tx_only` case
+- `cargo fmt --all`
+- `cargo test -p base-protocol batch_reader -- --nocapture`
+- `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- `cargo bench -p base-protocol --bench batch_reader span_signed_tx_components -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10`
+- extracted medians from `target/criterion/protocol_batch_reader_span_signed_tx_components/*/*/new/estimates.json`
+- `gh pr list --head automation/perf-autopilot --state open`
+Results:
+- kept production logic unchanged and added benchmark-only coverage that rebuilds typed transactions from decoded span fixtures, then measures `signature_hash()` separately from typed-transaction field assembly
+- validation passed: `cargo test -p base-protocol batch_reader -- --nocapture` (`2 passed`) and `cargo clippy -p base-protocol --tests --benches --no-deps -- -D warnings`
+- new median benchmark results show `signature_hash()` is overwhelmingly dominant inside `to_signed_tx()`:
+  - `span_to_signed_tx_only/1`: `2.3998 ms`
+  - `span_build_typed_tx_only/1`: `39.285 µs` (~`1.64%` of total)
+  - `span_signature_hash_only/1`: `2.3287 ms` (~`97.0%` of total)
+  - `span_to_signed_tx_only/64`: `160.14 ms`
+  - `span_build_typed_tx_only/64`: `2.6204 ms` (~`1.64%` of total)
+  - `span_signature_hash_only/64`: `154.78 ms` (~`96.6%` of total)
+- interpretation: another ownership/plumbing change in typed transaction assembly is unlikely to move the end-to-end `full_txs()` floor much; nearly all of the remaining cost in `to_signed_tx()` is signature-hash generation
+- branch/PR hygiene check: existing open PR remains `#2409` (`perf: optimize batcher hot paths`), so no new PR was opened
+Next:
+- if this path is revisited again, target `signature_hash()` specifically (or prove it cannot be amortized/cached safely in the span decode path) before attempting any more `to_signed_tx()` field-assembly changes.

@@ -2,9 +2,9 @@
 
 use std::hint::black_box;
 
-use alloy_consensus::TxEnvelope;
+use alloy_consensus::{SignableTransaction, TxEip1559, TxEip2930, TxEip7702, TxEnvelope, TxLegacy};
 use alloy_eips::eip2718::Encodable2718;
-use alloy_primitives::{Address, Bytes, Signature, hex};
+use alloy_primitives::{Address, B256, Bytes, Signature, TxKind, U256, hex};
 use alloy_rlp::Decodable;
 use base_common_genesis::{HardForkConfig, RollupConfig};
 use base_protocol::{
@@ -43,6 +43,14 @@ struct DecodedSpanTransactionFixture {
     to: Option<Address>,
     signature: Signature,
     is_protected: bool,
+}
+
+#[derive(Clone)]
+enum TypedTransactionFixture {
+    Legacy(TxLegacy),
+    Eip2930(TxEip2930),
+    Eip1559(TxEip1559),
+    Eip7702(TxEip7702),
 }
 
 fn decompressed_batch_fixture(batch_count: usize) -> Vec<u8> {
@@ -307,6 +315,114 @@ fn decoded_span_transaction_fixtures(
             }
         })
         .collect()
+}
+
+fn u128_from_u256(value: &U256) -> u128 {
+    u128::from_be_bytes(
+        value.to_be_bytes::<32>()[16..]
+            .try_into()
+            .expect("low 16 bytes of U256 must decode as u128"),
+    )
+}
+
+fn build_typed_transaction(
+    span_transaction: &DecodedSpanTransactionFixture,
+    chain_id: u64,
+) -> TypedTransactionFixture {
+    match &span_transaction.tx {
+        SpanBatchTransactionData::Legacy(data) => TypedTransactionFixture::Legacy(TxLegacy {
+            chain_id: span_transaction.is_protected.then_some(chain_id),
+            nonce: span_transaction.nonce,
+            gas_price: u128_from_u256(&data.gas_price),
+            gas_limit: span_transaction.gas,
+            to: span_transaction.to.map_or(TxKind::Create, TxKind::Call),
+            value: data.value,
+            input: data.data.clone().into(),
+        }),
+        SpanBatchTransactionData::Eip2930(data) => TypedTransactionFixture::Eip2930(TxEip2930 {
+            chain_id,
+            nonce: span_transaction.nonce,
+            gas_price: u128_from_u256(&data.gas_price),
+            gas_limit: span_transaction.gas,
+            to: span_transaction.to.map_or(TxKind::Create, TxKind::Call),
+            value: data.value,
+            input: data.data.clone().into(),
+            access_list: data.access_list.clone(),
+        }),
+        SpanBatchTransactionData::Eip1559(data) => TypedTransactionFixture::Eip1559(TxEip1559 {
+            chain_id,
+            nonce: span_transaction.nonce,
+            max_fee_per_gas: u128_from_u256(&data.max_fee_per_gas),
+            max_priority_fee_per_gas: u128_from_u256(&data.max_priority_fee_per_gas),
+            gas_limit: span_transaction.gas,
+            to: span_transaction.to.map_or(TxKind::Create, TxKind::Call),
+            value: data.value,
+            input: data.data.clone().into(),
+            access_list: data.access_list.clone(),
+        }),
+        SpanBatchTransactionData::Eip7702(data) => TypedTransactionFixture::Eip7702(TxEip7702 {
+            chain_id,
+            nonce: span_transaction.nonce,
+            max_fee_per_gas: u128_from_u256(&data.max_fee_per_gas),
+            max_priority_fee_per_gas: u128_from_u256(&data.max_priority_fee_per_gas),
+            gas_limit: span_transaction.gas,
+            to: span_transaction
+                .to
+                .expect("span batch fixture eip7702 transaction must have a to address"),
+            value: data.value,
+            input: data.data.clone().into(),
+            access_list: data.access_list.clone(),
+            authorization_list: data.authorization_list.clone(),
+        }),
+    }
+}
+
+fn build_all_typed_transactions(
+    span_transactions: &[DecodedSpanTransactionFixture],
+    chain_id: u64,
+) -> usize {
+    let mut tx_count = 0;
+
+    for span_transaction in span_transactions {
+        let tx = build_typed_transaction(span_transaction, chain_id);
+        black_box(tx);
+        tx_count += 1;
+    }
+
+    tx_count
+}
+
+fn typed_transaction_fixtures_from_decoded_span_transactions(
+    span_transactions: &[DecodedSpanTransactionFixture],
+    chain_id: u64,
+) -> Vec<TypedTransactionFixture> {
+    span_transactions
+        .iter()
+        .map(|span_transaction| build_typed_transaction(span_transaction, chain_id))
+        .collect()
+}
+
+impl TypedTransactionFixture {
+    fn signature_hash(&self) -> B256 {
+        match self {
+            Self::Legacy(tx) => tx.signature_hash(),
+            Self::Eip2930(tx) => tx.signature_hash(),
+            Self::Eip1559(tx) => tx.signature_hash(),
+            Self::Eip7702(tx) => tx.signature_hash(),
+        }
+    }
+}
+
+fn signature_hash_all_typed_transactions(typed_transactions: &[TypedTransactionFixture]) -> usize {
+    let mut tx_count = 0;
+
+    for typed_transaction in typed_transactions {
+        let signature_hash = typed_transaction.signature_hash();
+        black_box(signature_hash);
+        tx_count += 1;
+    }
+
+    tx_count
 }
 
 fn build_all_signed_tx_envelopes(
@@ -745,6 +861,65 @@ fn bench_batch_reader_span_full_txs_components(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_batch_reader_span_signed_tx_components(c: &mut Criterion) {
+    let mut group = c.benchmark_group("protocol/batch_reader/span_signed_tx_components");
+    group.sample_size(20);
+
+    let cfg = RollupConfig::default();
+    let chain_id = cfg.l2_chain_id.id();
+
+    for batch_count in BATCH_COUNTS {
+        let decompressed = decompressed_batch_fixture(batch_count);
+        let raw_span_batches = raw_span_batch_templates_from_decompressed(decompressed.as_slice());
+        let span_transactions = span_transaction_fixtures_from_raw_span_batches(&raw_span_batches);
+        let decoded_span_transactions = decoded_span_transaction_fixtures(&span_transactions);
+        let typed_transactions = typed_transaction_fixtures_from_decoded_span_transactions(
+            &decoded_span_transactions,
+            chain_id,
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("span_to_signed_tx_only", batch_count),
+            &decoded_span_transactions,
+            |b, decoded_span_transactions| {
+                b.iter(|| {
+                    black_box(build_all_signed_tx_envelopes(
+                        black_box(decoded_span_transactions.as_slice()),
+                        black_box(chain_id),
+                    ));
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("span_build_typed_tx_only", batch_count),
+            &decoded_span_transactions,
+            |b, decoded_span_transactions| {
+                b.iter(|| {
+                    black_box(build_all_typed_transactions(
+                        black_box(decoded_span_transactions.as_slice()),
+                        black_box(chain_id),
+                    ));
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("span_signature_hash_only", batch_count),
+            &typed_transactions,
+            |b, typed_transactions| {
+                b.iter(|| {
+                    black_box(signature_hash_all_typed_transactions(black_box(
+                        typed_transactions.as_slice(),
+                    )));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_batch_reader_constructor,
@@ -754,5 +929,6 @@ criterion_group!(
     bench_batch_reader_post_decompression_components,
     bench_batch_reader_batch_decode_components,
     bench_batch_reader_span_full_txs_components,
+    bench_batch_reader_span_signed_tx_components,
 );
 criterion_main!(benches);
