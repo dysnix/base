@@ -105,7 +105,7 @@ async fn status(State(state): State<FaucetState>) -> Result<Json<StatusResponse>
     // Contracts.json is produced by the one-shot setup container. If the
     // file is missing or the key is absent we silently omit the USDV row -
     // status is a polling endpoint and should never spam on that path.
-    let usdv_address = contracts::lookup(&state.config.contracts_path, "usdv").ok().flatten();
+    let usdv_address = contracts::lookup(&state.config.contracts_path, "usdv").await.ok().flatten();
 
     Ok(Json(StatusResponse {
         address: state.config.address,
@@ -144,20 +144,14 @@ async fn drip(
     let ip_key = (Asset::Eth, client_ip);
     let addr_key = (Asset::Eth, to);
 
-    if let Some(remaining) = state.ip_limiter.try_acquire(ip_key, state.config.ip_cooldown) {
-        return Err(ApiError::rate_limited(format!(
-            "ip cooldown active; retry in {}s",
-            remaining.as_secs().max(1)
-        )));
-    }
-
-    if let Some(remaining) = state.addr_limiter.try_acquire(addr_key, state.config.addr_cooldown) {
-        state.ip_limiter.release(&ip_key);
-        return Err(ApiError::rate_limited(format!(
-            "address cooldown active; retry in {}s",
-            remaining.as_secs().max(1)
-        )));
-    }
+    let ip_permit = state
+        .ip_limiter
+        .try_reserve(ip_key, state.config.ip_cooldown)
+        .map_err(|remaining| cooldown_error("ip", remaining))?;
+    let addr_permit = state
+        .addr_limiter
+        .try_reserve(addr_key, state.config.addr_cooldown)
+        .map_err(|remaining| cooldown_error("address", remaining))?;
 
     let tx = TransactionRequest::default()
         .with_to(to)
@@ -168,11 +162,11 @@ async fn drip(
         Ok(pending) => {
             let tx_hash = *pending.tx_hash();
             info!(%to, %client_ip, %tx_hash, drip_wei = %state.config.drip_wei, "drip submitted");
+            ip_permit.commit();
+            addr_permit.commit();
             Ok(Json(DripResponse { tx_hash, amount_wei: state.config.drip_wei, to }))
         }
         Err(e) => {
-            state.ip_limiter.release(&ip_key);
-            state.addr_limiter.release(&addr_key);
             warn!(%to, %client_ip, error = %e, "drip submission failed");
             Err(ApiError::internal(format!("failed to submit drip: {e}")))
         }
@@ -205,6 +199,7 @@ async fn drip_usdv(
     // a branch switch); re-reading keeps the faucet in sync without a
     // restart. Reads are cheap (a few kB file) and only on the mint path.
     let token = contracts::lookup(&state.config.contracts_path, "usdv")
+        .await
         .map_err(|e| ApiError::internal(format!("contracts lookup failed: {e}")))?
         .ok_or_else(|| {
             ApiError::service_unavailable(
@@ -216,20 +211,14 @@ async fn drip_usdv(
     let ip_key = (Asset::Usdv, client_ip);
     let addr_key = (Asset::Usdv, to);
 
-    if let Some(remaining) = state.ip_limiter.try_acquire(ip_key, state.config.ip_cooldown) {
-        return Err(ApiError::rate_limited(format!(
-            "ip cooldown active; retry in {}s",
-            remaining.as_secs().max(1)
-        )));
-    }
-
-    if let Some(remaining) = state.addr_limiter.try_acquire(addr_key, state.config.addr_cooldown) {
-        state.ip_limiter.release(&ip_key);
-        return Err(ApiError::rate_limited(format!(
-            "address cooldown active; retry in {}s",
-            remaining.as_secs().max(1)
-        )));
-    }
+    let ip_permit = state
+        .ip_limiter
+        .try_reserve(ip_key, state.config.ip_cooldown)
+        .map_err(|remaining| cooldown_error("ip", remaining))?;
+    let addr_permit = state
+        .addr_limiter
+        .try_reserve(addr_key, state.config.addr_cooldown)
+        .map_err(|remaining| cooldown_error("address", remaining))?;
 
     let amount = state.config.usdv_drip_units;
     let calldata = IUSDV::mintCall { to, amount }.abi_encode();
@@ -242,15 +231,22 @@ async fn drip_usdv(
         Ok(pending) => {
             let tx_hash = *pending.tx_hash();
             info!(%to, %client_ip, %token, %tx_hash, usdv_units = %amount, "usdv drip submitted");
+            ip_permit.commit();
+            addr_permit.commit();
             Ok(Json(UsdvDripResponse { tx_hash, token, amount_units: amount, to }))
         }
         Err(e) => {
-            state.ip_limiter.release(&ip_key);
-            state.addr_limiter.release(&addr_key);
             warn!(%to, %client_ip, %token, error = %e, "usdv drip submission failed");
             Err(ApiError::internal(format!("failed to submit usdv drip: {e}")))
         }
     }
+}
+
+fn cooldown_error(scope: &str, remaining: std::time::Duration) -> ApiError {
+    ApiError::rate_limited(format!(
+        "{scope} cooldown active; retry in {}s",
+        remaining.as_secs().max(1)
+    ))
 }
 
 /// Extract the real client IP. Prefers `X-Real-IP` (set by the nginx gateway

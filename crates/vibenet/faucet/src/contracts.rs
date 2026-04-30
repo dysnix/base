@@ -6,17 +6,16 @@
 //! this file on every USDV drip so it picks up new deploys without
 //! restarting.
 
-use std::{fs, path::Path};
+use std::path::Path;
 
 use alloy_primitives::Address;
-use serde::Deserialize;
 
 /// Read `path` and return the requested contract address, if present.
 /// Returns `Ok(None)` when the file exists but the entry is missing (e.g.
 /// setup is still running) so callers can distinguish that from a hard
 /// filesystem error.
-pub(crate) fn lookup(path: &Path, key: &str) -> eyre::Result<Option<Address>> {
-    let bytes = match fs::read(path) {
+pub async fn lookup(path: &Path, key: &str) -> eyre::Result<Option<Address>> {
+    let bytes = match tokio::fs::read(path).await {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(eyre::eyre!("reading {}: {e}", path.display())),
@@ -34,18 +33,4 @@ pub(crate) fn lookup(path: &Path, key: &str) -> eyre::Result<Option<Address>> {
         .parse::<Address>()
         .map_err(|e| eyre::eyre!("{} in {} is not an address: {e}", key, path.display()))?;
     Ok(Some(addr))
-}
-
-/// Typed view used in tests; kept here to document the on-disk shape.
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ContractsFile {
-    #[serde(rename = "_branch")]
-    branch: Option<String>,
-    #[serde(rename = "_commit")]
-    commit: Option<String>,
-    #[serde(rename = "faucetAddress")]
-    faucet_address: Option<String>,
-    usdv: Option<String>,
-    nfv: Option<String>,
 }

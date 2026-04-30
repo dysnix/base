@@ -30,11 +30,13 @@ use crate::{
 };
 
 /// `keccak256("Transfer(address,address,uint256)")`. Covers ERC-20 and
-/// ERC-721 (ERC-721 marks from/to/id as indexed so topics.len() == 4; we
+/// ERC-721 (ERC-721 marks from/to/id as indexed so `topics.len()` == 4; we
 /// treat both identically for activity indexing).
 const TRANSFER_TOPIC: B256 =
     b256!("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
 
+/// Background worker that indexes blocks into the address activity database.
+#[derive(Debug)]
 pub struct Indexer {
     rpc: RpcClient,
     ws_url: String,
@@ -45,7 +47,8 @@ pub struct Indexer {
 }
 
 impl Indexer {
-    pub fn new(
+    /// Build a new indexer.
+    pub const fn new(
         rpc: RpcClient,
         ws_url: String,
         storage: Storage,
@@ -98,7 +101,7 @@ impl Indexer {
         Ok(())
     }
 
-    /// Catch up from the cursor (or start_block) to the current head.
+    /// Catch up from the cursor (or `start_block`) to the current head.
     async fn backfill(&self, shutdown: &tokio::sync::watch::Receiver<bool>) -> Result<()> {
         let mut next = match self.storage.cursor().await? {
             Some((n, _)) => n + 1,
@@ -246,14 +249,15 @@ impl Indexer {
         // Cheap reorg guard: the parent of block N must match what we
         // stored as block N-1. A divergence on a single-sequencer devnet
         // indicates something is broken, so refuse to advance.
-        if let Some((prev_num, prev_hash)) = self.storage.cursor().await? {
-            if block.header.number > 0 && prev_num + 1 == block.header.number {
-                let parent = block.header.parent_hash;
-                if parent != prev_hash {
-                    return Err(eyre!(
-                        "reorg detected: block {number} parent {parent} != cursor hash {prev_hash}"
-                    ));
-                }
+        if let Some((prev_num, prev_hash)) = self.storage.cursor().await?
+            && block.header.number > 0
+            && prev_num + 1 == block.header.number
+        {
+            let parent = block.header.parent_hash;
+            if parent != prev_hash {
+                return Err(eyre!(
+                    "reorg detected: block {number} parent {parent} != cursor hash {prev_hash}"
+                ));
             }
         }
 

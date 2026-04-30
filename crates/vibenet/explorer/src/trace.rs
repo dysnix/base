@@ -8,7 +8,7 @@
 //! Rather than render this schema through Askama directly (which doesn't do
 //! recursive macros ergonomically), we parse it into [`TraceNode`] and then
 //! emit pre-built HTML with native `<details>` elements for collapse/expand.
-//! No JavaScript, and the tree degrades gracefully if a user disables it.
+//! No `JavaScript`, and the tree degrades gracefully if a user disables it.
 
 use std::fmt::Write;
 
@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::models::{AddrLabel, format_eth};
 
 /// One call frame in the trace tree.
-pub struct TraceNode {
+pub(crate) struct TraceNode {
     pub call_type: String,
     pub from: AddrLabel,
     pub to: Option<AddrLabel>,
@@ -43,7 +43,7 @@ pub struct TraceNode {
 impl TraceNode {
     /// Parse a callTracer JSON node. Returns `None` if required fields
     /// are missing — the caller should treat that as "trace not available".
-    pub fn from_json(v: &Value) -> Option<Self> {
+    pub(crate) fn from_json(v: &Value) -> Option<Self> {
         let obj = v.as_object()?;
         let call_type = obj.get("type").and_then(Value::as_str).unwrap_or("CALL").to_string();
         let from_str = obj.get("from").and_then(Value::as_str).unwrap_or("");
@@ -99,14 +99,14 @@ impl TraceNode {
     }
 
     /// Total number of call frames in the subtree (including self).
-    pub fn total_calls(&self) -> usize {
+    pub(crate) fn total_calls(&self) -> usize {
         1 + self.children.iter().map(Self::total_calls).sum::<usize>()
     }
 
     /// Render the whole tree to HTML. Top-level node is open by default;
     /// nested nodes are collapsed. Addresses are linked to their address
     /// pages.
-    pub fn render_html(&self) -> String {
+    pub(crate) fn render_html(&self) -> String {
         let mut out = String::with_capacity(1024);
         self.write_html(&mut out, true);
         out

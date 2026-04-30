@@ -18,10 +18,11 @@ use eyre::{Result, WrapErr};
 /// points [`alloy_network::Network::TransactionResponse`] at
 /// `base_common_rpc_types::Transaction`, which knows about
 /// [`base_common_consensus::BaseTxEnvelope`].
-pub type BaseBlock = <Base as alloy_network::Network>::BlockResponse;
-pub type BaseTransaction = <Base as alloy_network::Network>::TransactionResponse;
-pub type BaseReceipt = <Base as alloy_network::Network>::ReceiptResponse;
+pub(crate) type BaseBlock = <Base as alloy_network::Network>::BlockResponse;
+pub(crate) type BaseTransaction = <Base as alloy_network::Network>::TransactionResponse;
+pub(crate) type BaseReceipt = <Base as alloy_network::Network>::ReceiptResponse;
 
+/// HTTP JSON-RPC client for explorer read-through queries.
 #[derive(Clone)]
 pub struct RpcClient {
     inner: Arc<RootProvider<Base>>,
@@ -34,6 +35,7 @@ impl std::fmt::Debug for RpcClient {
 }
 
 impl RpcClient {
+    /// Connect to the upstream HTTP RPC endpoint.
     pub async fn connect(http_url: &str) -> Result<Self> {
         let url = http_url.parse().wrap_err_with(|| format!("parsing rpc url {http_url}"))?;
         let provider = ProviderBuilder::new()
@@ -43,54 +45,50 @@ impl RpcClient {
         Ok(Self { inner: Arc::new(provider.root().clone()) })
     }
 
-    pub fn provider(&self) -> &RootProvider<Base> {
-        &self.inner
-    }
-
-    pub async fn chain_id(&self) -> Result<u64> {
+    pub(crate) async fn chain_id(&self) -> Result<u64> {
         Ok(self.inner.get_chain_id().await?)
     }
 
-    pub async fn block_by_number(&self, n: u64) -> Result<Option<BaseBlock>> {
+    pub(crate) async fn block_by_number(&self, n: u64) -> Result<Option<BaseBlock>> {
         Ok(self.inner.get_block_by_number(n.into()).full().await?)
     }
 
-    pub async fn block_by_hash(&self, h: B256) -> Result<Option<BaseBlock>> {
+    pub(crate) async fn block_by_hash(&self, h: B256) -> Result<Option<BaseBlock>> {
         Ok(self.inner.get_block_by_hash(h).full().await?)
     }
 
-    pub async fn tx_by_hash(&self, h: B256) -> Result<Option<BaseTransaction>> {
+    pub(crate) async fn tx_by_hash(&self, h: B256) -> Result<Option<BaseTransaction>> {
         Ok(self.inner.get_transaction_by_hash(h).await?)
     }
 
-    pub async fn receipt(&self, h: B256) -> Result<Option<BaseReceipt>> {
+    pub(crate) async fn receipt(&self, h: B256) -> Result<Option<BaseReceipt>> {
         Ok(self.inner.get_transaction_receipt(h).await?)
     }
 
-    pub async fn block_receipts(&self, id: BlockId) -> Result<Option<Vec<BaseReceipt>>> {
+    pub(crate) async fn block_receipts(&self, id: BlockId) -> Result<Option<Vec<BaseReceipt>>> {
         Ok(self.inner.get_block_receipts(id).await?)
     }
 
-    pub async fn balance(&self, addr: Address) -> Result<U256> {
+    pub(crate) async fn balance(&self, addr: Address) -> Result<U256> {
         Ok(self.inner.get_balance(addr).await?)
     }
 
-    pub async fn nonce(&self, addr: Address) -> Result<u64> {
+    pub(crate) async fn nonce(&self, addr: Address) -> Result<u64> {
         Ok(self.inner.get_transaction_count(addr).await?)
     }
 
-    pub async fn code(&self, addr: Address) -> Result<Bytes> {
+    pub(crate) async fn code(&self, addr: Address) -> Result<Bytes> {
         Ok(self.inner.get_code_at(addr).await?)
     }
 
-    pub async fn block_number(&self) -> Result<u64> {
+    pub(crate) async fn block_number(&self) -> Result<u64> {
         Ok(self.inner.get_block_number().await?)
     }
 
     /// Run `debug_traceTransaction` with the built-in `callTracer`. Returns
     /// the raw JSON result so the caller can pretty-print it without us
     /// committing to a schema for every tracer variant.
-    pub async fn trace_transaction(&self, h: B256) -> Result<serde_json::Value> {
+    pub(crate) async fn trace_transaction(&self, h: B256) -> Result<serde_json::Value> {
         let opts = serde_json::json!({ "tracer": "callTracer" });
         let value: serde_json::Value = self
             .inner

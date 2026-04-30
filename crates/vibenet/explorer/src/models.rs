@@ -7,7 +7,7 @@ use std::fmt;
 use alloy_consensus::Typed2718 as _;
 use alloy_network_primitives::{ReceiptResponse as _, TransactionResponse as _};
 use alloy_primitives::{Address, B256, U256};
-use alloy_rpc_types_eth::TransactionTrait as _;
+use alloy_rpc_types_eth::TransactionTrait as EthTransactionTrait;
 
 use crate::{
     rpc_proxy::{BaseBlock, BaseReceipt, BaseTransaction},
@@ -16,7 +16,7 @@ use crate::{
 
 /// Common footer/context fields present on every rendered page.
 #[derive(Debug, Clone)]
-pub struct PageCtx {
+pub(crate) struct PageCtx {
     pub branch: String,
     pub commit: String,
     pub public_rpc_url: Option<String>,
@@ -24,7 +24,7 @@ pub struct PageCtx {
 }
 
 /// A block for listing rows.
-pub struct BlockListItem {
+pub(crate) struct BlockListItem {
     pub number: u64,
     pub hash: AddrLabel,
     pub timestamp: u64,
@@ -51,22 +51,22 @@ impl From<BlockRow> for BlockListItem {
 }
 
 /// Short + full hex pair, easier to iterate in templates than a tuple.
-pub struct AddrLabel {
+pub(crate) struct AddrLabel {
     pub full: String,
     pub short: String,
 }
 
 impl AddrLabel {
-    pub fn from_addr(a: &Address) -> Self {
+    pub(crate) fn from_addr(a: &Address) -> Self {
         Self { full: hex_prefix(a), short: short_hex(a) }
     }
-    pub fn from_b256(h: &B256) -> Self {
+    pub(crate) fn from_b256(h: &B256) -> Self {
         Self { full: hex_prefix(h), short: short_hex(h) }
     }
 }
 
 /// A transaction for listing rows.
-pub struct TxListItem {
+pub(crate) struct TxListItem {
     pub hash: AddrLabel,
     pub block_num: u64,
     pub from: AddrLabel,
@@ -91,7 +91,7 @@ impl From<TxRow> for TxListItem {
 }
 
 /// One activity feed item on an address page.
-pub struct ActivityItem {
+pub(crate) struct ActivityItem {
     pub block_num: u64,
     pub tx_hash_hex: String,
     pub tx_hash_short: String,
@@ -125,7 +125,7 @@ impl From<ActivityRow> for ActivityItem {
 }
 
 /// Fields surfaced on a block detail page.
-pub struct BlockDetail {
+pub(crate) struct BlockDetail {
     pub number: u64,
     pub hash: AddrLabel,
     pub parent: AddrLabel,
@@ -139,7 +139,7 @@ pub struct BlockDetail {
 }
 
 impl BlockDetail {
-    pub fn from_rpc(block: &BaseBlock, receipts: Option<&[BaseReceipt]>) -> Self {
+    pub(crate) fn from_rpc(block: &BaseBlock, receipts: Option<&[BaseReceipt]>) -> Self {
         let mut txs = Vec::with_capacity(block.transactions.len());
         for (idx, t) in block.transactions.txns().enumerate() {
             let hash = t.tx_hash();
@@ -181,13 +181,13 @@ impl BlockDetail {
 /// (timestamp, base fee) without the template having to know about
 /// the full block type.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct TxBlockMeta {
+pub(crate) struct TxBlockMeta {
     pub timestamp: u64,
     pub base_fee_per_gas: Option<u64>,
 }
 
 /// Fields surfaced on a tx detail page.
-pub struct TxDetail {
+pub(crate) struct TxDetail {
     pub hash: AddrLabel,
     pub block_num: u64,
     /// Unix seconds (from the containing block), or `None` if the tx is
@@ -221,14 +221,14 @@ pub struct TxDetail {
     /// Block's base fee per gas in gwei (caller passes it in since the
     /// receipt doesn't carry it).
     pub base_fee_gwei: Option<String>,
-    /// gas_used * effective_gas_price, formatted as ETH.
+    /// `gas_used * effective_gas_price`, formatted as ETH.
     pub fee_eth: Option<String>,
-    /// gas_used / gas_limit, formatted like `"42.18%"`.
+    /// `gas_used / gas_limit`, formatted like `"42.18%"`.
     pub gas_usage_pct: Option<String>,
 }
 
 impl TxDetail {
-    pub fn from_rpc(
+    pub(crate) fn from_rpc(
         tx: &BaseTransaction,
         receipt: Option<&BaseReceipt>,
         block_meta: Option<TxBlockMeta>,
@@ -299,9 +299,8 @@ impl TxDetail {
         // presence before displaying. Fully qualify to disambiguate between
         // the `TransactionResponse` and `TransactionTrait` impls that both
         // expose `max_fee_per_gas`.
-        use alloy_rpc_types_eth::TransactionTrait;
-        let max_fee = TransactionTrait::max_fee_per_gas(tx);
-        let max_prio = TransactionTrait::max_priority_fee_per_gas(tx);
+        let max_fee = EthTransactionTrait::max_fee_per_gas(tx);
+        let max_prio = EthTransactionTrait::max_priority_fee_per_gas(tx);
         let max_fee_gwei = if max_fee > 0 { Some(format_gwei(U256::from(max_fee))) } else { None };
         let max_priority_fee_gwei = max_prio.map(|v| format_gwei(U256::from(v)));
 
@@ -348,7 +347,7 @@ impl TxDetail {
 /// Human label for an EIP-2718 tx type byte. Covers the Ethereum standard
 /// types plus OP-stack deposit (0x7e); unknown types fall through to
 /// "unknown" so we don't silently mislabel future variants.
-fn tx_type_label(ty: u8) -> &'static str {
+const fn tx_type_label(ty: u8) -> &'static str {
     match ty {
         0x00 => "legacy",
         0x01 => "access list (EIP-2930)",
@@ -360,7 +359,7 @@ fn tx_type_label(ty: u8) -> &'static str {
     }
 }
 
-pub struct LogDetail {
+pub(crate) struct LogDetail {
     pub index: u64,
     pub address: AddrLabel,
     pub topics_hex: Vec<String>,
@@ -368,7 +367,7 @@ pub struct LogDetail {
     pub erc20_transfer: Option<Erc20TransferDetail>,
 }
 
-pub struct Erc20TransferDetail {
+pub(crate) struct Erc20TransferDetail {
     pub token: AddrLabel,
     pub from: AddrLabel,
     pub to: AddrLabel,
@@ -376,7 +375,7 @@ pub struct Erc20TransferDetail {
 }
 
 /// Fields on an address page.
-pub struct AddressDetail {
+pub(crate) struct AddressDetail {
     pub hex: String,
     pub balance_eth: String,
     pub nonce: u64,
@@ -387,7 +386,7 @@ pub struct AddressDetail {
 }
 
 /// Home page stats.
-pub struct StatsBlock {
+pub(crate) struct StatsBlock {
     pub blocks: u64,
     pub txs: u64,
     pub addresses: u64,
@@ -395,18 +394,18 @@ pub struct StatsBlock {
 }
 
 impl StatsBlock {
-    pub fn new(s: Stats, head: u64) -> Self {
+    pub(crate) const fn new(s: Stats, head: u64) -> Self {
         Self { blocks: s.blocks, txs: s.txs, addresses: s.addresses, head }
     }
 }
 
 // ---- formatting helpers -------------------------------------------------
 
-pub fn hex_prefix<T: AsRef<[u8]>>(bytes: &T) -> String {
+pub(crate) fn hex_prefix<T: AsRef<[u8]>>(bytes: &T) -> String {
     format!("0x{}", hex::encode(bytes.as_ref()))
 }
 
-pub fn short_hex<T: AsRef<[u8]>>(bytes: &T) -> String {
+pub(crate) fn short_hex<T: AsRef<[u8]>>(bytes: &T) -> String {
     let hex = hex::encode(bytes.as_ref());
     if hex.len() <= 10 {
         format!("0x{hex}")
@@ -415,7 +414,7 @@ pub fn short_hex<T: AsRef<[u8]>>(bytes: &T) -> String {
     }
 }
 
-pub fn format_age(ts: u64) -> String {
+pub(crate) fn format_age(ts: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -436,7 +435,7 @@ pub fn format_age(ts: u64) -> String {
     format!("{}d ago", diff / 86400)
 }
 
-pub fn format_eth(value: U256) -> String {
+pub(crate) fn format_eth(value: U256) -> String {
     // 18 decimals. We only need display precision, so truncate rather than
     // round and keep everything in u128-safe arithmetic via division.
     let wei = value;
@@ -455,13 +454,13 @@ pub fn format_eth(value: U256) -> String {
     }
 }
 
-pub fn format_gwei(value: U256) -> String {
+pub(crate) fn format_gwei(value: U256) -> String {
     let gwei = value / U256::from(1_000_000_000u64);
     let frac = value % U256::from(1_000_000_000u64);
     if frac == U256::ZERO {
         format!("{gwei} gwei")
     } else {
-        format!("{gwei}.{:09} gwei", frac).trim_end_matches('0').to_string()
+        format!("{gwei}.{frac:09} gwei").trim_end_matches('0').to_string()
     }
 }
 
@@ -514,13 +513,4 @@ impl fmt::Display for BlockListItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "block #{}", self.number)
     }
-}
-
-/// Helper: turn an [`Address`] or [`B256`] into the pair (full hex, short hex).
-pub fn hex_pair_b256(h: &B256) -> (String, String) {
-    (hex_prefix(h), short_hex(h))
-}
-
-pub fn hex_pair_addr(a: &Address) -> (String, String) {
-    (hex_prefix(a), short_hex(a))
 }

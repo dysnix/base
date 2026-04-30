@@ -4,7 +4,7 @@
 //! - on-demand reads from the upstream node (for full block/tx bodies,
 //!   balances, code, etc.)
 //!
-//! No response is cached; SQLite is only used for the queries the node
+//! No response is cached; `SQLite` is only used for the queries the node
 //! cannot answer.
 
 use std::{net::SocketAddr, sync::Arc};
@@ -39,12 +39,13 @@ const STYLE_CSS: &str = include_str!("../static/style.css");
 /// at runtime, same as the CSS.
 const FAVICON_PNG: &[u8] = include_bytes!("../static/favicon.png");
 
-#[derive(Clone)]
+/// HTTP explorer service.
+#[derive(Clone, Debug)]
 pub struct Explorer {
     state: Arc<AppState>,
 }
 
-pub struct AppState {
+pub(crate) struct AppState {
     storage: Storage,
     rpc: RpcClient,
     ctx: PageCtx,
@@ -57,6 +58,7 @@ impl std::fmt::Debug for AppState {
 }
 
 impl Explorer {
+    /// Build an explorer from config, storage, and an upstream RPC client.
     pub fn new(config: &ExplorerConfig, storage: Storage, rpc: RpcClient) -> Self {
         let ctx = PageCtx {
             branch: config.branch.clone(),
@@ -67,6 +69,7 @@ impl Explorer {
         Self { state: Arc::new(AppState { storage, rpc, ctx }) }
     }
 
+    /// Convert the explorer into an Axum router.
     pub fn into_router(self) -> Router {
         Router::new()
             .route("/", get(home))
@@ -88,6 +91,7 @@ impl Explorer {
             .with_state(self.state)
     }
 
+    /// Serve HTTP requests until the shutdown signal fires.
     pub async fn serve(
         self,
         addr: SocketAddr,
@@ -292,8 +296,20 @@ async fn tx_trace(State(state): State<Arc<AppState>>, Path(hash): Path<String>) 
     // trace isn't available right now. Fall back to a friendly notice and
     // keep the back-link so they can continue.
     match state.rpc.trace_transaction(h).await {
-        Ok(v) => match TraceNode::from_json(&v) {
-            Some(root) => {
+        Ok(v) => TraceNode::from_json(&v).map_or_else(
+            || {
+                render_html(TraceTmpl {
+                    ctx: state.ctx.clone(),
+                    tx_hash: hash.clone(),
+                    back_href: format!("/tx/{hash}"),
+                    total_calls: 0,
+                    trace_html: String::new(),
+                    unavailable: Some(
+                        "The node returned a trace in an unexpected format.".to_string(),
+                    ),
+                })
+            },
+            |root| {
                 let total = root.total_calls();
                 let html = root.render_html();
                 render_html(TraceTmpl {
@@ -304,16 +320,8 @@ async fn tx_trace(State(state): State<Arc<AppState>>, Path(hash): Path<String>) 
                     trace_html: html,
                     unavailable: None,
                 })
-            }
-            None => render_html(TraceTmpl {
-                ctx: state.ctx.clone(),
-                tx_hash: hash.clone(),
-                back_href: format!("/tx/{hash}"),
-                total_calls: 0,
-                trace_html: String::new(),
-                unavailable: Some("The node returned a trace in an unexpected format.".to_string()),
-            }),
-        },
+            },
+        ),
         Err(err) => {
             tracing::warn!(error = %err, tx = %hash, "trace_transaction failed");
             render_html(TraceTmpl {
@@ -556,16 +564,16 @@ fn render_raw(
 
 fn render_error(ctx: &PageCtx, status: u16, message: String) -> Response {
     let body = ErrorTmpl { ctx: ctx.clone(), status, message: message.clone() };
-    match body.render() {
-        Ok(s) => {
-            (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), Html(s))
-                .into_response()
-        }
-        Err(_) => {
+    body.render().map_or_else(
+        |_| {
             (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), message)
                 .into_response()
-        }
-    }
+        },
+        |s| {
+            (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), Html(s))
+                .into_response()
+        },
+    )
 }
 
 fn error_json(status: StatusCode, message: String) -> Response {

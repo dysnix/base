@@ -1,9 +1,7 @@
 //! Entrypoint: reads config, opens storage, starts indexer + HTTP server,
 //! and waits for SIGINT/SIGTERM for a clean shutdown.
 
-use base_vibenet_explorer::{
-    ExplorerConfig, indexer::Indexer, rpc_proxy::RpcClient, server::Explorer, storage::Storage,
-};
+use base_vibenet_explorer::{Explorer, ExplorerConfig, Indexer, RpcClient, Storage};
 use eyre::{Result, WrapErr};
 use tokio::signal;
 use tracing::info;

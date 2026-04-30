@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Sweep expired entries once the limiter exceeds this many remembered keys.
+const SWEEP_THRESHOLD: usize = 10_000;
+
 /// Tracks the last time a given key was served and answers "is this key in
 /// cooldown right now?" queries.
 ///
@@ -32,6 +35,9 @@ impl<K: Eq + Hash + Clone> Limiter<K> {
             Err(poisoned) => poisoned.into_inner(),
         };
         let now = Instant::now();
+        if map.len() > SWEEP_THRESHOLD {
+            map.retain(|_, last| now.duration_since(*last) < cooldown);
+        }
 
         if let Some(last) = map.get(&key) {
             let elapsed = now.duration_since(*last);
@@ -44,6 +50,17 @@ impl<K: Eq + Hash + Clone> Limiter<K> {
         None
     }
 
+    /// Reserve a cooldown slot and release it automatically unless the caller
+    /// commits the permit after the protected action succeeds.
+    pub fn try_reserve(
+        &self,
+        key: K,
+        cooldown: Duration,
+    ) -> Result<LimiterPermit<'_, K>, Duration> {
+        self.try_acquire(key.clone(), cooldown)
+            .map_or_else(|| Ok(LimiterPermit { limiter: self, key: Some(key) }), Err)
+    }
+
     /// Undo a previous `try_acquire` for `key`. Used when the downstream
     /// action (e.g. sending a transaction) fails and we don't want to punish
     /// the user for our failure.
@@ -53,6 +70,29 @@ impl<K: Eq + Hash + Clone> Limiter<K> {
             Err(poisoned) => poisoned.into_inner(),
         };
         map.remove(key);
+    }
+}
+
+/// A successful limiter reservation that releases itself on drop unless
+/// explicitly committed.
+#[derive(Debug)]
+pub struct LimiterPermit<'a, K: Eq + Hash + Clone> {
+    limiter: &'a Limiter<K>,
+    key: Option<K>,
+}
+
+impl<K: Eq + Hash + Clone> LimiterPermit<'_, K> {
+    /// Keep the cooldown entry after the protected action succeeds.
+    pub fn commit(mut self) {
+        self.key = None;
+    }
+}
+
+impl<K: Eq + Hash + Clone> Drop for LimiterPermit<'_, K> {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            self.limiter.release(&key);
+        }
     }
 }
 
@@ -79,5 +119,22 @@ mod tests {
         assert!(limiter.try_acquire("a", Duration::from_secs(60)).is_none());
         limiter.release(&"a");
         assert!(limiter.try_acquire("a", Duration::from_secs(60)).is_none());
+    }
+
+    #[test]
+    fn dropped_permit_releases_cooldown() {
+        let limiter = Limiter::<&'static str>::new();
+        let permit = limiter.try_reserve("a", Duration::from_secs(60)).unwrap();
+        assert!(limiter.try_acquire("a", Duration::from_secs(60)).is_some());
+        drop(permit);
+        assert!(limiter.try_acquire("a", Duration::from_secs(60)).is_none());
+    }
+
+    #[test]
+    fn committed_permit_keeps_cooldown() {
+        let limiter = Limiter::<&'static str>::new();
+        let permit = limiter.try_reserve("a", Duration::from_secs(60)).unwrap();
+        permit.commit();
+        assert!(limiter.try_acquire("a", Duration::from_secs(60)).is_some());
     }
 }

@@ -17,7 +17,7 @@ use crate::{config::FaucetConfig, limiter::Limiter};
 /// Concrete provider type used by the faucet. Mirrors the stack installed by
 /// [`ProviderBuilder::new`] (recommended fillers) plus our wallet filler so we
 /// can sign and submit transactions with a single `.send_transaction` call.
-pub(crate) type FaucetProvider = FillProvider<
+pub type FaucetProvider = FillProvider<
     JoinFill<
         JoinFill<
             Identity,
@@ -34,8 +34,10 @@ pub(crate) type FaucetProvider = FillProvider<
 /// into cooldown for USDV (and vice versa). Adding a new faucet-dispensed
 /// asset only requires adding a variant here.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-pub(crate) enum Asset {
+pub enum Asset {
+    /// Native ETH drip.
     Eth,
+    /// USDV token mint.
     Usdv,
 }
 

@@ -37,6 +37,7 @@ pub struct ExplorerConfig {
     pub public_faucet_url: Option<String>,
     /// Git branch / commit strings for the footer.
     pub branch: String,
+    /// Git commit string for the footer.
     pub commit: String,
 }
 
