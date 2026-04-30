@@ -11,6 +11,7 @@ use base_proof_tee_nitro_verifier::VerifierInput;
 use boundless_market::{
     Client,
     contracts::Predicate,
+    price_oracle::{Amount, Asset},
     request_builder::{OfferParams, RequestParams, RequirementParams},
 };
 use risc0_zkvm::sha::Digest;
@@ -91,7 +92,10 @@ impl AttestationProofProvider for BoundlessProver {
             .with_requirements(
                 RequirementParams::builder().predicate(Predicate::prefix_match(image_id, [])),
             )
-            .with_offer(OfferParams::builder().max_price(U256::from(self.max_price)));
+            .with_offer(
+                OfferParams::builder()
+                    .max_price(Amount::new(U256::from(self.max_price), Asset::ETH)),
+            );
 
         let (request_id, expires_at) = client
             .submit_onchain(params)
