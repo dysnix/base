@@ -26,22 +26,23 @@
       <p class="subtitle">Drip testnet ETH or mint USDV (Vibe USD) to any address.</p>
 
       <div class="chain-card">
-        <div id="faucet-status" class="muted faucet-status">loading status...</div>
+        <div id="faucet-status" class="faucet-status">loading status...</div>
 
         <form id="drip-form" class="faucet-form">
           <label for="addr">Recipient address</label>
           <input id="addr" name="address" placeholder="0x..." required pattern="^0x[a-fA-F0-9]{40}$" />
           <div class="drip-buttons">
-            <button type="submit" name="token" value="eth">Drip ETH</button>
-            <button type="submit" name="token" value="usdv" class="secondary">Mint USDV</button>
+            <button type="submit" name="token" value="eth" class="request-btn">Request 0.1 ETH</button>
+            <button type="submit" name="token" value="usdv" class="request-btn secondary">Request 1000 USDV</button>
           </div>
         </form>
-        <pre id="drip-result" class="terminal-body drip-result"></pre>
+        <div id="drip-result" class="drip-result" aria-live="polite"></div>
       </div>
     </section>
   </main>
 
   <footer class="site-footer">
+    <span id="faucet-footer-links" class="faucet-footer-links"></span>
     <span class="footer-spacer"></span>
     <a href="https://base.org" target="_blank" rel="noopener">base.org</a>
   </footer>

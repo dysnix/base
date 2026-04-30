@@ -23,7 +23,15 @@
   <main>
     <section class="hero">
       <p class="subtitle" id="subtitle"></p>
+    </section>
 
+    <section>
+      <h2>Features</h2>
+      <div id="features" class="features-grid"></div>
+    </section>
+
+    <section>
+      <h2>Connect</h2>
       <div class="chain-card">
         <div class="chain-row">
           <span class="chain-label">Chain ID</span>
@@ -40,16 +48,10 @@
           </button>
         </div>
         <div class="chain-row">
-          <span class="chain-label">WS URL</span>
-          <button type="button" class="chain-value copyable" data-copy-target="ws-display">
-            <code id="ws-display" class="truncate">...</code>
-            <span class="copy-hint" aria-hidden="true">Click to copy</span>
-          </button>
-        </div>
-        <div class="chain-row">
           <span class="chain-label">Explorer</span>
           <a id="explorer-link" class="chain-value" href="#" target="_blank" rel="noopener">...</a>
         </div>
+        <p class="notice small">Public RPC access is IP rate limited.</p>
         <div class="chain-actions">
           <button id="add-to-wallet" type="button">Add to wallet</button>
         </div>
@@ -58,28 +60,7 @@
     </section>
 
     <section>
-      <h2>Faucet</h2>
-      <div class="info-card">
-        <p id="faucet-description" class="muted"></p>
-        <a id="faucet-link" class="info-link" href="#" target="_blank" rel="noopener">Open faucet &#x2197;</a>
-      </div>
-    </section>
-
-    <section>
-      <h2>Explorer</h2>
-      <div class="info-card">
-        <p id="explorer-description" class="muted"></p>
-        <a id="explorer-section-link" class="info-link" href="#" target="_blank" rel="noopener">Open vibescan &#x2197;</a>
-      </div>
-    </section>
-
-    <section>
-      <h2>Features this Vibe</h2>
-      <div id="features" class="features-grid"></div>
-    </section>
-
-    <section>
-      <h2>Contracts</h2>
+      <h2>Deployed Contracts</h2>
       <div id="contracts-list" class="contracts-list">
         <p class="muted" style="padding: 0.75rem 1rem; margin: 0;">loading...</p>
       </div>

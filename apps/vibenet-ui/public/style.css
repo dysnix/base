@@ -141,10 +141,10 @@ main h3 {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 1.25rem 1.5rem;
+  padding: 1.15rem 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
+  gap: 0.5rem;
 }
 
 .chain-row {
@@ -171,7 +171,7 @@ main h3 {
   overflow: hidden;
 }
 
-code#chain-id, code#rpc-display, code#ws-display {
+code#chain-id, code#rpc-display {
   font-family: var(--mono);
   font-size: 13px;
   background: transparent;
@@ -225,6 +225,12 @@ button.chain-value.copyable.copied .copy-hint {
 button.chain-value.copyable.copied .copy-hint {
   color: var(--ok);
 }
+a.chain-value {
+  display: block;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
 
 .truncate {
   white-space: nowrap;
@@ -238,7 +244,14 @@ button.chain-value.copyable.copied .copy-hint {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
-  margin-top: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+#wallet-status:empty { display: none; }
+
+.notice {
+  margin: 0.25rem 0 0;
+  color: var(--fg-dim);
 }
 
 /* ---------- info card (faucet / explorer sections) ---------------------- */
@@ -394,6 +407,48 @@ button.secondary:hover:not(:disabled) {
   line-height: 1.6;
 }
 .faucet-status a { font-family: var(--mono); word-break: break-all; }
+.faucet-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+.faucet-pill {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+}
+.faucet-pill-key {
+  color: var(--fg-dim);
+  font-family: var(--mono);
+}
+.faucet-pill-value {
+  color: var(--fg);
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.faucet-footer-links {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.address-chip {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  background: var(--card);
+  color: var(--accent-hover);
+  font-size: 12px;
+}
+.address-chip:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
 
 .faucet-form {
   display: flex;
@@ -411,16 +466,44 @@ button.secondary:hover:not(:disabled) {
 
 .drip-buttons {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.75rem;
   flex-wrap: wrap;
-  margin-top: 0.25rem;
+  margin-top: 0.5rem;
+}
+.request-btn {
+  min-height: 48px;
+  padding: 0.75rem 1.2rem;
+  font-size: 15px;
+  flex: 1 1 220px;
 }
 
 .drip-result {
   margin-top: 0.75rem;
-  min-height: 40px;
-  white-space: pre-wrap;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 0;
+}
+.drip-result:empty { display: none; }
+.drip-result.pending,
+.drip-result.success,
+.drip-result.error {
+  padding: 0.8rem 0.9rem;
+  background: var(--bg-elev);
+  border-color: var(--border);
+}
+.drip-result.success { border-color: rgba(74, 222, 128, 0.35); }
+.drip-result.error { border-color: rgba(248, 113, 113, 0.45); color: var(--err); }
+.drip-result-title {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.drip-result-meta {
+  color: var(--fg-dim);
+  font-size: 13px;
   word-break: break-all;
+}
+.tx-link {
+  font-family: var(--mono);
 }
 
 /* ---------- footer ------------------------------------------------------ */

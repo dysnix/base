@@ -96,9 +96,9 @@ vibe: vibe-down _build-setup-image (_build-rust-images "devnet" "dev")
     fi
     export VIBENET_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
     export VIBENET_COMMIT="$(git rev-parse --short HEAD)"
-    public_overlay=()
+    public_overlay=
     if [ -f /etc/vibenet/tls/origin.crt ]; then
-      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
+      public_overlay="-f etc/vibenet/docker-compose.public.yml"
       echo "[vibe] public overlay enabled (/etc/vibenet/tls/origin.crt found)"
     fi
     docker compose \
@@ -106,7 +106,7 @@ vibe: vibe-down _build-setup-image (_build-rust-images "devnet" "dev")
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${public_overlay[@]}" \
+      $public_overlay \
       up -d --build --scale contender=0
 
 # Stops vibenet and deletes all data. `-v` wipes the named volumes so state
@@ -117,16 +117,16 @@ vibe: vibe-down _build-setup-image (_build-rust-images "devnet" "dev")
 vibe-down:
     #!/usr/bin/env bash
     set -euo pipefail
-    public_overlay=()
+    public_overlay=
     if [ -f /etc/vibenet/tls/origin.crt ]; then
-      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
+      public_overlay="-f etc/vibenet/docker-compose.public.yml"
     fi
     docker compose \
       --env-file etc/docker/devnet-env \
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${public_overlay[@]}" \
+      $public_overlay \
       down --remove-orphans -v || true
     docker run --rm -v "$(pwd)/.devnet:/devnet" alpine sh -c 'rm -rf /devnet/*' || true
 
@@ -154,9 +154,9 @@ vibe-faucet:
     fi
     export VIBENET_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
     export VIBENET_COMMIT="$(git rev-parse --short HEAD)"
-    public_overlay=()
+    public_overlay=
     if [ -f /etc/vibenet/tls/origin.crt ]; then
-      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
+      public_overlay="-f etc/vibenet/docker-compose.public.yml"
     fi
     # Rebuild the faucet image and recreate only its container. --no-deps
     # keeps base-client and friends untouched (they're already healthy).
@@ -167,7 +167,7 @@ vibe-faucet:
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${public_overlay[@]}" \
+      $public_overlay \
       up -d --no-deps --build --force-recreate vibenet-faucet
     # Re-run the yq config renderer (one-shot that writes a fresh
     # /srv/config/config.json) and recreate nginx so it re-runs envsubst
@@ -178,39 +178,39 @@ vibe-faucet:
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${public_overlay[@]}" \
+      $public_overlay \
       up -d --no-deps --force-recreate vibenet-config-renderer nginx-gateway
 
 # Stream logs from vibenet containers (optionally specify container names)
 vibe-logs *containers:
     #!/usr/bin/env bash
     set -euo pipefail
-    public_overlay=()
+    public_overlay=
     if [ -f /etc/vibenet/tls/origin.crt ]; then
-      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
+      public_overlay="-f etc/vibenet/docker-compose.public.yml"
     fi
     docker compose \
       --env-file etc/docker/devnet-env \
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${public_overlay[@]}" \
+      $public_overlay \
       logs -f {{ containers }}
 
 # Shows vibenet container status
 vibe-ps *services:
     #!/usr/bin/env bash
     set -euo pipefail
-    public_overlay=()
+    public_overlay=
     if [ -f /etc/vibenet/tls/origin.crt ]; then
-      public_overlay=(-f etc/vibenet/docker-compose.public.yml)
+      public_overlay="-f etc/vibenet/docker-compose.public.yml"
     fi
     docker compose \
       --env-file etc/docker/devnet-env \
       --env-file etc/vibenet/vibenet-env \
       -f etc/docker/docker-compose.yml \
       -f etc/vibenet/docker-compose.vibenet.yml \
-      "${public_overlay[@]}" \
+      $public_overlay \
       ps {{ services }}
 
 # Stops devnet+ingress, deletes data, and starts fresh with full ingress stack

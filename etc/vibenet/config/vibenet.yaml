@@ -12,26 +12,15 @@
 title: "base vibenet"
 subtitle: "An ephemeral Base devnet for trying out in-flight features."
 
-# Faucet section content. The URL is resolved client-side based on the
-# hostname (prod vs local); only the description is authored here.
-faucet:
-  description: >-
-    Drip testnet ETH or mint USDV (our public-mint ERC-20) to any address.
-    Rate limits apply per IP and per destination address.
-
-# Explorer section content. URL is resolved client-side.
-explorer:
-  description: >-
-    vibescan is the in-house block explorer - browse blocks, transactions,
-    and per-address activity feeds.
-
-# "Features this Vibe" - things unique to this devnet branch. Each item has
-# a title, one-sentence description, and optional link.
+# Things unique to this devnet branch. Each item has a title,
+# one-sentence description, and optional link. Keep the baseline vibenet
+# tools as a single card; branch owners can add their feature-specific
+# "what's new" cards above or below it.
 features:
-  - title: "USDV (Vibe USD)"
-    description: "Public-mint ERC-20 (6 decimals) for testing token flows."
-  - title: "NFV (Non-Fungible Vibe)"
-    description: "Public-mint ERC-721 for NFT-flow demos."
+  - title: "Vibenet faucet + explorer"
+    description: "Request test funds, browse blocks, inspect transactions, and follow token activity."
+  - title: "What's new on this vibe"
+    description: "Branch-specific updates will show up here when a vibe is deployed to preview what's upcoming or experimental."
 
 # Override injected at build time. Do not edit.
 branch: "unknown"

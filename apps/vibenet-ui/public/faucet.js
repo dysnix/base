@@ -50,47 +50,116 @@ function formatUsdv(units) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+function shortAddress(value) {
+  if (!value || value.length <= 14) return value || "";
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+function explorerLink(path, label, className) {
+  const a = document.createElement("a");
+  a.href = `${buildExplorerUrl()}${path}`;
+  a.target = "_blank";
+  a.rel = "noopener";
+  if (className) a.className = className;
+  a.textContent = label;
+  return a;
+}
+
+function statusPill(label, value) {
+  const pill = document.createElement("div");
+  pill.className = "faucet-pill";
+  const k = document.createElement("span");
+  k.className = "faucet-pill-key";
+  k.textContent = label;
+  const v = document.createElement("span");
+  v.className = "faucet-pill-value";
+  v.textContent = value;
+  pill.append(k, v);
+  return pill;
+}
+
 async function loadStatus() {
   const el = document.getElementById("faucet-status");
   try {
     const res = await fetch("/status", { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const s = await res.json();
-    const explorer = buildExplorerUrl();
     const eth = formatEth(s.balance_wei);
-    const dripEth = formatEth(s.drip_wei);
     el.innerHTML = "";
 
-    // Line 1: faucet EOA balance + ETH drip amount.
-    const line1 = document.createElement("div");
-    line1.append("Faucet ");
-    const faucetLink = document.createElement("a");
-    faucetLink.href = `${explorer}/address/${s.address}`;
-    faucetLink.target = "_blank";
-    faucetLink.rel = "noopener";
-    faucetLink.textContent = s.address;
-    line1.appendChild(faucetLink);
-    line1.append(` holds ${eth} ETH. Drips ${dripEth} ETH per request.`);
-    el.appendChild(line1);
+    const summary = document.createElement("div");
+    summary.className = "faucet-summary";
+    summary.append(statusPill("ETH", `${eth} ETH`));
+    summary.append(statusPill("USDV", s.usdv_address ? "Ready to print" : "Not deployed"));
+    el.appendChild(summary);
 
-    // Line 2: USDV status.
-    const line2 = document.createElement("div");
-    if (s.usdv_address) {
-      line2.append(`Mints ${formatUsdv(s.usdv_drip_units)} USDV per request at `);
-      const usdvLink = document.createElement("a");
-      usdvLink.href = `${explorer}/address/${s.usdv_address}`;
-      usdvLink.target = "_blank";
-      usdvLink.rel = "noopener";
-      usdvLink.textContent = s.usdv_address;
-      line2.appendChild(usdvLink);
-      line2.append(".");
-    } else {
-      line2.textContent = "USDV not yet deployed.";
+    const footerLinks = document.getElementById("faucet-footer-links");
+    if (footerLinks) {
+      footerLinks.innerHTML = "";
+      footerLinks.append(
+        explorerLink(
+          `/address/${s.address}`,
+          `Faucet ${shortAddress(s.address)}`,
+          "address-chip",
+        ),
+      );
     }
-    el.appendChild(line2);
+    if (s.usdv_address) {
+      footerLinks?.append(
+        explorerLink(
+          `/address/${s.usdv_address}`,
+          `USDV ${shortAddress(s.usdv_address)}`,
+          "address-chip",
+        ),
+      );
+    }
+
+    const ethButton = form.querySelector('button[value="eth"]');
+    if (ethButton) ethButton.textContent = `Request ${formatEth(s.drip_wei)} ETH`;
+    const usdvButton = form.querySelector('button[value="usdv"]');
+    if (usdvButton && s.usdv_drip_units) {
+      usdvButton.textContent = `Request ${formatUsdv(s.usdv_drip_units)} USDV`;
+      usdvButton.disabled = !s.usdv_address;
+    }
   } catch (err) {
     el.textContent = `Could not load faucet status: ${err.message}`;
   }
+}
+
+function setResultPending(token) {
+  const resultEl = document.getElementById("drip-result");
+  resultEl.className = "drip-result pending";
+  resultEl.textContent = token === "usdv" ? "Minting USDV..." : "Requesting ETH...";
+}
+
+function setResultSuccess(token, body) {
+  const resultEl = document.getElementById("drip-result");
+  const asset = token === "usdv" ? "USDV" : "ETH";
+  resultEl.className = "drip-result success";
+  resultEl.innerHTML = "";
+
+  const title = document.createElement("div");
+  title.className = "drip-result-title";
+  title.textContent = `${asset} request submitted`;
+
+  const meta = document.createElement("div");
+  meta.className = "drip-result-meta";
+  meta.append("Transaction ");
+  meta.append(explorerLink(`/tx/${body.tx_hash}`, shortAddress(body.tx_hash), "tx-link"));
+  meta.append(" -> ");
+  meta.append(explorerLink(`/address/${body.to}`, shortAddress(body.to), "tx-link"));
+  if (token === "usdv" && body.token) {
+    meta.append(" via ");
+    meta.append(explorerLink(`/address/${body.token}`, "USDV", "tx-link"));
+  }
+
+  resultEl.append(title, meta);
+}
+
+function setResultError(token, message) {
+  const resultEl = document.getElementById("drip-result");
+  resultEl.className = "drip-result error";
+  resultEl.textContent = `${token === "usdv" ? "USDV request" : "ETH request"} failed: ${message}`;
 }
 
 const form = document.getElementById("drip-form");
@@ -100,9 +169,8 @@ form.addEventListener("submit", async (ev) => {
   // submitter is set when a named submit button is clicked; default to ETH.
   const token = (ev.submitter && ev.submitter.value) || "eth";
   const buttons = form.querySelectorAll("button");
-  const resultEl = document.getElementById("drip-result");
   buttons.forEach((b) => (b.disabled = true));
-  resultEl.textContent = token === "usdv" ? "Minting USDV..." : "Dripping ETH...";
+  setResultPending(token);
   try {
     const endpoint = token === "usdv" ? "/drip-usdv" : "/drip";
     const res = await fetch(endpoint, {
@@ -121,9 +189,9 @@ form.addEventListener("submit", async (ev) => {
           : `HTTP ${res.status}`);
       throw new Error(reason);
     }
-    resultEl.textContent = JSON.stringify(body, null, 2);
+    setResultSuccess(token, body);
   } catch (err) {
-    resultEl.textContent = `${token === "usdv" ? "USDV mint" : "Drip"} failed: ${err.message}`;
+    setResultError(token, err.message);
   } finally {
     buttons.forEach((b) => (b.disabled = false));
     loadStatus();

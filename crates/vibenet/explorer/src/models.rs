@@ -101,7 +101,7 @@ impl From<ActivityRow> for ActivityItem {
     fn from(a: ActivityRow) -> Self {
         let role = match a.role {
             ActivityRole::Sender => "sender",
-            ActivityRole::Recipient => "recipient",
+            ActivityRole::Recipient => "called",
             ActivityRole::Creator => "created",
             ActivityRole::LogFrom => "token-out",
             ActivityRole::LogTo => "token-in",
@@ -243,11 +243,8 @@ impl TxDetail {
         } else {
             format!("0x{}… ({} bytes)", &input_hex[..64], input.len())
         };
-        let selector = if input.len() >= 4 {
-            Some(format!("0x{}", hex::encode(&input[..4])))
-        } else {
-            None
-        };
+        let selector =
+            if input.len() >= 4 { Some(format!("0x{}", hex::encode(&input[..4]))) } else { None };
 
         let logs = receipt
             .map(|r| {
@@ -255,23 +252,17 @@ impl TxDetail {
                     .logs()
                     .iter()
                     .enumerate()
-                    .map(|(i, log)| LogDetail {
-                        index: i as u64,
-                        address: AddrLabel::from_addr(&log.address()),
-                        topics_hex: log.topics().iter().map(hex_prefix).collect(),
-                        data_short: {
-                            let bytes = &log.data().data;
-                            if bytes.is_empty() {
-                                "(empty)".to_string()
-                            } else {
-                                let d = hex::encode(bytes);
-                                if d.len() <= 64 {
-                                    format!("0x{d}")
-                                } else {
-                                    format!("0x{}… ({} bytes)", &d[..64], bytes.len())
-                                }
-                            }
-                        },
+                    .map(|(i, log)| {
+                        let address = log.address();
+                        let topics = log.topics();
+                        let data = &log.data().data;
+                        LogDetail {
+                            index: i as u64,
+                            address: AddrLabel::from_addr(&address),
+                            topics_hex: topics.iter().map(hex_prefix).collect(),
+                            data_short: data_short(data),
+                            erc20_transfer: decode_erc20_transfer(address, topics, data),
+                        }
                     })
                     .collect()
             })
@@ -287,9 +278,9 @@ impl TxDetail {
         let effective_gas_price = receipt.map(|r| r.effective_gas_price()).unwrap_or(0);
 
         let fee_eth = match gas_used {
-            Some(g) if effective_gas_price > 0 => Some(format_eth(
-                U256::from(g).saturating_mul(U256::from(effective_gas_price)),
-            )),
+            Some(g) if effective_gas_price > 0 => {
+                Some(format_eth(U256::from(g).saturating_mul(U256::from(effective_gas_price))))
+            }
             _ => None,
         };
         let gas_usage_pct = gas_used.and_then(|g| {
@@ -372,6 +363,14 @@ pub struct LogDetail {
     pub address: AddrLabel,
     pub topics_hex: Vec<String>,
     pub data_short: String,
+    pub erc20_transfer: Option<Erc20TransferDetail>,
+}
+
+pub struct Erc20TransferDetail {
+    pub token: AddrLabel,
+    pub from: AddrLabel,
+    pub to: AddrLabel,
+    pub amount_raw: String,
 }
 
 /// Fields on an address page.
@@ -462,6 +461,49 @@ pub fn format_gwei(value: U256) -> String {
     } else {
         format!("{gwei}.{:09} gwei", frac).trim_end_matches('0').to_string()
     }
+}
+
+fn data_short(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "(empty)".to_string();
+    }
+    let d = hex::encode(bytes);
+    if d.len() <= 64 {
+        format!("0x{d}")
+    } else {
+        format!("0x{}… ({} bytes)", &d[..64], bytes.len())
+    }
+}
+
+const ERC20_TRANSFER_TOPIC: [u8; 32] = [
+    0xdd, 0xf2, 0x52, 0xad, 0x1b, 0xe2, 0xc8, 0x9b, 0x69, 0xc2, 0xb0, 0x68, 0xfc, 0x37, 0x8d, 0xaa,
+    0x95, 0x2b, 0xa7, 0xf1, 0x63, 0xc4, 0xa1, 0x16, 0x28, 0xf5, 0x5a, 0x4d, 0xf5, 0x23, 0xb3, 0xef,
+];
+
+fn decode_erc20_transfer(
+    token: Address,
+    topics: &[B256],
+    data: &[u8],
+) -> Option<Erc20TransferDetail> {
+    // ERC-20 Transfer(address indexed from, address indexed to, uint256 value).
+    // ERC-721 uses the same event signature but indexes tokenId too, yielding
+    // four topics, so the topics.len() == 3 check keeps NFT transfers separate.
+    let event_topic: &[u8] = topics.first()?.as_ref();
+    if topics.len() != 3 || event_topic != ERC20_TRANSFER_TOPIC || data.len() != 32 {
+        return None;
+    }
+
+    let from_topic: &[u8] = topics.get(1)?.as_ref();
+    let to_topic: &[u8] = topics.get(2)?.as_ref();
+    let from = Address::from_slice(&from_topic[12..]);
+    let to = Address::from_slice(&to_topic[12..]);
+    let amount = U256::from_be_slice(data);
+    Some(Erc20TransferDetail {
+        token: AddrLabel::from_addr(&token),
+        from: AddrLabel::from_addr(&from),
+        to: AddrLabel::from_addr(&to),
+        amount_raw: amount.to_string(),
+    })
 }
 
 // Implement Display passthroughs so templates can `{{ a | safe }}` address /

@@ -48,17 +48,6 @@ function buildRpcUrl() {
   return `https://${PUBLIC_SERVICE_HOSTS.rpc}`;
 }
 
-function buildWsUrl() {
-  const host = location.hostname;
-  if (isLocalHost(host)) {
-    const uiPort = parseInt(location.port || "80", 10);
-    const rpcPort = uiPort + 1;
-    const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-    return `${scheme}//${host}:${rpcPort}/ws`;
-  }
-  return `wss://${PUBLIC_SERVICE_HOSTS.rpc}/ws`;
-}
-
 function buildExplorerUrl() {
   const host = location.hostname;
   if (isLocalHost(host)) {
@@ -91,13 +80,11 @@ async function main() {
   document.getElementById("commit").textContent = (config.commit || "unknown").slice(0, 12);
 
   const rpcUrl = buildRpcUrl();
-  const wsUrl = buildWsUrl();
   const explorerUrl = buildExplorerUrl();
   const faucetUrl = buildFaucetUrl();
 
   document.getElementById("chain-id").textContent = String(VIBENET_CHAIN_ID);
   document.getElementById("rpc-display").textContent = rpcUrl;
-  document.getElementById("ws-display").textContent = wsUrl;
 
   const explorerEl = document.getElementById("explorer-link");
   explorerEl.href = explorerUrl;
@@ -108,24 +95,6 @@ async function main() {
 
   const faucetNav = document.getElementById("faucet-nav");
   if (faucetNav) faucetNav.href = faucetUrl;
-
-  const faucetDesc = document.getElementById("faucet-description");
-  if (faucetDesc) {
-    faucetDesc.textContent =
-      (config.faucet && config.faucet.description) ||
-      "Drip testnet ETH or mint USDV to any address.";
-  }
-  const faucetLink = document.getElementById("faucet-link");
-  if (faucetLink) faucetLink.href = faucetUrl;
-
-  const explorerDesc = document.getElementById("explorer-description");
-  if (explorerDesc) {
-    explorerDesc.textContent =
-      (config.explorer && config.explorer.description) ||
-      "vibescan is the in-house block explorer for this devnet.";
-  }
-  const explorerSectionLink = document.getElementById("explorer-section-link");
-  if (explorerSectionLink) explorerSectionLink.href = explorerUrl;
 
   renderFeatures(config.features || []);
   renderContracts(contracts, explorerUrl);
@@ -194,6 +163,8 @@ function renderContracts(contracts, explorerBase) {
   host.innerHTML = "";
   let rendered = 0;
   for (const [k, v] of Object.entries(contracts)) {
+    // `faucetAddress` is the faucet signer EOA, not a deployed contract.
+    if (k === "faucetAddress") continue;
     if (k.startsWith("_")) continue;
     if (typeof v !== "string") continue;
     if (!/^0x[0-9a-fA-F]{40}$/.test(v)) continue;

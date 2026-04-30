@@ -118,7 +118,26 @@
   <div class="log-header">
     <span class="log-index">#{{ log.index }}</span>
     <code><a href="/address/{{ log.address.full }}">{{ log.address.short }}</a></code>
+    {% match log.erc20_transfer %}
+      {% when Some with (_) %}
+        <span class="event-badge">ERC-20 Transfer</span>
+      {% when None %}
+    {% endmatch %}
   </div>
+  {% match log.erc20_transfer %}
+    {% when Some with (transfer) %}
+      <dl class="decoded-event">
+        <dt>Token</dt>
+        <dd><code><a href="/address/{{ transfer.token.full }}">{{ transfer.token.short }}</a></code></dd>
+        <dt>From</dt>
+        <dd><code><a href="/address/{{ transfer.from.full }}">{{ transfer.from.full }}</a></code></dd>
+        <dt>To</dt>
+        <dd><code><a href="/address/{{ transfer.to.full }}">{{ transfer.to.full }}</a></code></dd>
+        <dt>Amount</dt>
+        <dd><code>{{ transfer.amount_raw }}</code> <span class="dim">raw token units</span></dd>
+      </dl>
+    {% when None %}
+  {% endmatch %}
   <ul class="topics">
     {% for t in log.topics_hex %}
       <li><code>{{ t }}</code></li>
