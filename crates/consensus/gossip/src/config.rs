@@ -54,6 +54,9 @@ pub const DEFAULT_MAX_ESTABLISHED_CONNECTIONS: u32 = 30;
 /// The default maximum number of established libp2p connections per peer.
 pub const DEFAULT_MAX_ESTABLISHED_CONNECTIONS_PER_PEER: u32 = 1;
 
+/// The maximum number of peers to retain identify metadata for.
+pub const MAX_IDENTIFY_PEERSTORE_PEERS: usize = 1024;
+
 ////////////////////////////////////////////////////////////////////////////////////////////////
 // Duration Constants
 ////////////////////////////////////////////////////////////////////////////////////////////////
