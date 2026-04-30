@@ -15,5 +15,5 @@ to detect new Nitro enclave instances, fetches their attestation documents via
   and [`SigningConfig`] for L1 transaction signing.
 - **`error`** — [`RegistrarError`] enum covering all failure modes.
 - **`prover`** — [`ProverClient`] JSON-RPC client for polling prover signer endpoints.
-- **`traits`** — [`InstanceDiscovery`] and [`AttestationProofProvider`] trait definitions.
+- **`traits`** — [`InstanceDiscovery`] and shared [`TeeAttestationProofProvider`] usage.
 - **`types`** — Core domain types: [`ProverInstance`], [`RegisteredSigner`].

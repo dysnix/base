@@ -10,7 +10,7 @@ use std::{collections::HashSet, error::Error, fmt, time::Duration};
 use alloy_primitives::{Address, Bytes, FixedBytes, hex};
 use alloy_sol_types::SolCall;
 use base_proof_contracts::{INitroEnclaveVerifier, ITEEProverRegistry};
-use base_proof_tee_nitro_attestation_prover::AttestationProofProvider;
+use base_proof_tee_attestation::{TeeAttestationKind, TeeAttestationProofProvider};
 use base_proof_tee_nitro_verifier::AttestationReport;
 use base_tx_manager::{TxCandidate, TxManager, TxManagerError};
 use futures::stream::StreamExt;
@@ -107,7 +107,7 @@ impl<D, P, R, T, S> fmt::Debug for RegistrationDriver<D, P, R, T, S> {
 impl<D, P, R, T, S> RegistrationDriver<D, P, R, T, S>
 where
     D: InstanceDiscovery,
-    P: AttestationProofProvider,
+    P: TeeAttestationProofProvider,
     R: RegistryClient,
     T: TxManager,
     S: SignerClient,
@@ -505,13 +505,21 @@ where
             return Ok(());
         }
 
-        let calldata = Bytes::from(
-            ITEEProverRegistry::registerSignerCall {
-                output: proof.output,
-                proofBytes: proof.proof_bytes,
+        let calldata = match proof.kind {
+            TeeAttestationKind::Nitro => Bytes::from(
+                ITEEProverRegistry::registerSignerCall {
+                    output: proof.output,
+                    proofBytes: proof.proof_bytes,
+                }
+                .abi_encode(),
+            ),
+            TeeAttestationKind::Tdx { zk_coprocessor } => {
+                return Err(RegistrarError::Config(format!(
+                    "TDX registration is not wired yet (zk_coprocessor: {})",
+                    zk_coprocessor as u8
+                )));
             }
-            .abi_encode(),
-        );
+        };
 
         info!(
             signer = %signer_address,
@@ -903,7 +911,7 @@ mod tests {
     use alloy_rpc_types_eth::TransactionReceipt;
     use alloy_sol_types::SolCall;
     use async_trait::async_trait;
-    use base_proof_tee_nitro_attestation_prover::AttestationProof;
+    use base_proof_tee_attestation::{Result as TeeAttestationResult, TeeAttestationProof};
     use base_tx_manager::{SendHandle, TxCandidate, TxManager, TxManagerError};
     use hex_literal::hex;
     use k256::ecdsa::SigningKey;
@@ -1048,12 +1056,14 @@ mod tests {
     struct StubProofProvider;
 
     #[async_trait]
-    impl AttestationProofProvider for StubProofProvider {
-        async fn generate_proof(
+    impl TeeAttestationProofProvider for StubProofProvider {
+        async fn generate_proof_for_signer(
             &self,
             _attestation_bytes: &[u8],
-        ) -> base_proof_tee_nitro_attestation_prover::Result<AttestationProof> {
-            Ok(AttestationProof {
+            _signer_address: Address,
+        ) -> TeeAttestationResult<TeeAttestationProof> {
+            Ok(TeeAttestationProof {
+                kind: TeeAttestationKind::Nitro,
                 output: Bytes::from_static(b"stub-output"),
                 proof_bytes: Bytes::from_static(b"stub-proof"),
             })
@@ -1065,14 +1075,13 @@ mod tests {
     struct FailingProofProvider;
 
     #[async_trait]
-    impl AttestationProofProvider for FailingProofProvider {
-        async fn generate_proof(
+    impl TeeAttestationProofProvider for FailingProofProvider {
+        async fn generate_proof_for_signer(
             &self,
             _attestation_bytes: &[u8],
-        ) -> base_proof_tee_nitro_attestation_prover::Result<AttestationProof> {
-            Err(base_proof_tee_nitro_attestation_prover::ProverError::Boundless(
-                "simulated proof failure".into(),
-            ))
+            _signer_address: Address,
+        ) -> TeeAttestationResult<TeeAttestationProof> {
+            Err(Box::new(std::io::Error::other("simulated proof failure")))
         }
     }
 
@@ -1329,13 +1338,15 @@ mod tests {
     }
 
     #[async_trait]
-    impl AttestationProofProvider for CountingProofProvider {
-        async fn generate_proof(
+    impl TeeAttestationProofProvider for CountingProofProvider {
+        async fn generate_proof_for_signer(
             &self,
             _attestation_bytes: &[u8],
-        ) -> base_proof_tee_nitro_attestation_prover::Result<AttestationProof> {
+            _signer_address: Address,
+        ) -> TeeAttestationResult<TeeAttestationProof> {
             self.call_count.fetch_add(1, Ordering::Relaxed);
-            Ok(AttestationProof {
+            Ok(TeeAttestationProof {
+                kind: TeeAttestationKind::Nitro,
                 output: Bytes::from_static(b"stub-output"),
                 proof_bytes: Bytes::from_static(b"stub-proof"),
             })
@@ -1437,7 +1448,7 @@ mod tests {
 
     /// Builds a driver for tx retry tests with configurable proof provider,
     /// tx manager, and registry.
-    fn retry_driver<P: AttestationProofProvider>(
+    fn retry_driver<P: TeeAttestationProofProvider>(
         signer_client: MockSignerClient,
         registry: DynamicRegistry,
         tx: FailingTxManager,

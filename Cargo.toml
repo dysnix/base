@@ -27,6 +27,7 @@ members = [
   "crates/proof/host",
   "crates/proof/tee/nitro-host",
   "crates/proof/tee/nitro-enclave",
+  "crates/proof/tee/attestation",
   "crates/proof/tee/registrar",
   "crates/proof/tee/nitro-verifier",
   "crates/proof/tee/nitro-attestation-prover",
@@ -230,6 +231,7 @@ base-zk-outbox = { path = "crates/proof/zk/outbox" }
 base-zk-service = { path = "crates/proof/zk/service" }
 base-challenger = { path = "crates/proof/challenge" }
 base-proof-contracts = { path = "crates/proof/contracts" }
+base-proof-tee-attestation = { path = "crates/proof/tee/attestation" }
 base-proof-tee-registrar = { path = "crates/proof/tee/registrar" }
 base-proof-tee-nitro-host = { path = "crates/proof/tee/nitro-host" }
 base-proof = { path = "crates/proof/proof", default-features = false }

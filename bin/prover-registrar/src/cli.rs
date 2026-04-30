@@ -15,9 +15,8 @@ use alloy_signer_local::PrivateKeySigner;
 use base_balance_monitor::BalanceMonitorLayer;
 use base_cli_utils::RuntimeManager;
 use base_health::HealthServer;
-use base_proof_tee_nitro_attestation_prover::{
-    AttestationProofProvider, BoundlessProver, DirectProver,
-};
+use base_proof_tee_attestation::TeeAttestationProofProvider;
+use base_proof_tee_nitro_attestation_prover::{BoundlessProver, DirectProver};
 use base_proof_tee_registrar::{
     AwsDiscoveryConfig, AwsTargetGroupDiscovery, BoundlessConfig, CrlConfig,
     DEFAULT_CRL_FETCH_TIMEOUT_SECS, DEFAULT_MAX_ATTESTATION_AGE_SECS, DEFAULT_MAX_CONCURRENCY,
@@ -498,7 +497,7 @@ impl Cli {
         );
 
         // ── 6. Build proof provider ──────────────────────────────────────────
-        let proof_provider: Box<dyn AttestationProofProvider> = match config.proving {
+        let proof_provider: Box<dyn TeeAttestationProofProvider> = match config.proving {
             ProvingConfig::Boundless(ref boundless) => Box::new(BoundlessProver {
                 rpc_url: boundless.rpc_url.clone(),
                 signer: boundless.signer.clone(),

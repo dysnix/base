@@ -10,11 +10,14 @@
 
 use std::sync::Arc;
 
-use alloy_primitives::Bytes;
+use alloy_primitives::{Address, Bytes};
+use base_proof_tee_attestation::{
+    TeeAttestationKind, TeeAttestationProof, TeeAttestationProofProvider,
+};
 use base_proof_tee_nitro_verifier::VerifierInput;
 use risc0_zkvm::{ExecutorEnv, ProverOpts, compute_image_id, default_prover};
 
-use crate::{AttestationProof, AttestationProofProvider, ProverError, Result};
+use crate::{ProverError, Result};
 
 /// Attestation prover using the RISC Zero default prover.
 ///
@@ -49,11 +52,9 @@ impl DirectProver {
     pub const fn image_id(&self) -> &[u32; 8] {
         &self.image_id
     }
-}
 
-#[async_trait::async_trait]
-impl AttestationProofProvider for DirectProver {
-    async fn generate_proof(&self, attestation_bytes: &[u8]) -> Result<AttestationProof> {
+    /// Generates a Nitro attestation proof for the given raw attestation document bytes.
+    pub async fn generate_proof(&self, attestation_bytes: &[u8]) -> Result<TeeAttestationProof> {
         let elf = Arc::clone(&self.elf);
         let trusted_certs_prefix_len = self.trusted_certs_prefix_len;
         let attestation_owned = attestation_bytes.to_vec();
@@ -87,7 +88,22 @@ impl AttestationProofProvider for DirectProver {
         .await
         .map_err(|e| ProverError::Risc0(format!("proving task panicked: {e}")))??;
 
-        Ok(AttestationProof { output: Bytes::from(journal_bytes), proof_bytes: Bytes::from(seal) })
+        Ok(TeeAttestationProof {
+            kind: TeeAttestationKind::Nitro,
+            output: Bytes::from(journal_bytes),
+            proof_bytes: Bytes::from(seal),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl TeeAttestationProofProvider for DirectProver {
+    async fn generate_proof_for_signer(
+        &self,
+        attestation_bytes: &[u8],
+        _signer_address: Address,
+    ) -> base_proof_tee_attestation::Result<TeeAttestationProof> {
+        Ok(self.generate_proof(attestation_bytes).await?)
     }
 }
 

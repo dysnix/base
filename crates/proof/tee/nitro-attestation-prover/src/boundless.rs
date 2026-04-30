@@ -14,17 +14,20 @@
 //! without external state.
 //!
 //! See [`BoundlessProver::derive_request_index`] and the
-//! [`generate_proof_for_signer`](AttestationProofProvider::generate_proof_for_signer)
+//! [`generate_proof_for_signer`](TeeAttestationProofProvider::generate_proof_for_signer)
 //! override on [`BoundlessProver`] for details.
 
 use std::{collections::HashSet, fmt, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256, Bytes, keccak256};
 use alloy_signer_local::PrivateKeySigner;
+use base_proof_tee_attestation::{
+    TeeAttestationKind, TeeAttestationProof, TeeAttestationProofProvider,
+};
 use base_proof_tee_nitro_verifier::{VerifierInput, VerifierJournal};
 // `boundless-market` re-exports `alloy` (`pub use alloy`) but does not
 // re-export `DynProvider` directly — access it via the SDK's alloy so
-// the type in our alias matches the one inside `Client`.
+// the type in `BoundlessClient` matches the one inside `Client`.
 use boundless_market::alloy::providers::DynProvider;
 use boundless_market::{
     Client, NotProvided,
@@ -36,7 +39,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::{AttestationProof, AttestationProofProvider, ProverError, Result};
+use crate::{ProverError, Result};
 
 /// Concrete [`Client`] type produced by the builder chain used in
 /// [`BoundlessProver`]. The uploader is [`NotProvided`] because we
@@ -160,7 +163,7 @@ impl BoundlessProver {
         &self,
         client: &BoundlessClient,
         request_id: alloy_primitives::U256,
-    ) -> Result<AttestationProof> {
+    ) -> Result<TeeAttestationProof> {
         let image_id_bytes: [u8; 32] = Digest::from(self.image_id).into();
         let image_id_b256 = B256::from(image_id_bytes);
 
@@ -214,7 +217,7 @@ impl BoundlessProver {
             "set inclusion receipt fetched and seal encoded successfully"
         );
 
-        Ok(AttestationProof { output: journal, proof_bytes })
+        Ok(TeeAttestationProof { kind: TeeAttestationKind::Nitro, output: journal, proof_bytes })
     }
 
     /// Waits for fulfillment of a locked request with the TOCTOU retry
@@ -225,7 +228,7 @@ impl BoundlessProver {
         client: &BoundlessClient,
         request_id: alloy_primitives::U256,
         effective_expiry: u64,
-    ) -> Result<AttestationProof> {
+    ) -> Result<TeeAttestationProof> {
         const MAX_RACE_RETRIES: u32 = 3;
         let mut race_retries = 0;
         let _fulfillment = loop {
@@ -348,7 +351,7 @@ impl BoundlessProver {
     /// wall-clock time. Returns `false` (stale) when the journal cannot
     /// be decoded, since an undecodable proof is unlikely to verify
     /// on-chain.
-    fn is_journal_fresh(&self, proof: &AttestationProof) -> bool {
+    fn is_journal_fresh(&self, proof: &TeeAttestationProof) -> bool {
         let journal = match VerifierJournal::decode(&proof.output) {
             Ok(j) => j,
             Err(e) => {
@@ -379,14 +382,13 @@ impl BoundlessProver {
     /// Acquires the submit lock, submits a proof request on-chain, then
     /// waits for fulfillment and fetches the set inclusion receipt.
     ///
-    /// Shared between [`generate_proof`](AttestationProofProvider::generate_proof)
-    /// and the fresh-submission tail of
-    /// [`generate_proof_for_signer`](AttestationProofProvider::generate_proof_for_signer).
+    /// Shared between [`generate_proof`](Self::generate_proof) and the fresh-submission tail of
+    /// [`generate_proof_for_signer`](TeeAttestationProofProvider::generate_proof_for_signer).
     async fn submit_and_wait(
         &self,
         client: &BoundlessClient,
         params: RequestParams,
-    ) -> Result<AttestationProof> {
+    ) -> Result<TeeAttestationProof> {
         let (request_id, expires_at) = {
             let _guard = self.submit_lock.lock().await;
             client.submit_onchain(params).await.map_err(|e| {
@@ -417,15 +419,16 @@ impl BoundlessProver {
 
         self.wait_and_fetch(client, request_id, effective_expiry).await
     }
-}
 
-#[async_trait::async_trait]
-impl AttestationProofProvider for BoundlessProver {
-    async fn generate_proof(&self, attestation_bytes: &[u8]) -> Result<AttestationProof> {
+    /// Generates a Nitro attestation proof with a fresh Boundless request ID.
+    pub async fn generate_proof(&self, attestation_bytes: &[u8]) -> Result<TeeAttestationProof> {
         let (client, params) = self.build_client_and_params(attestation_bytes).await?;
         self.submit_and_wait(&client, params).await
     }
+}
 
+#[async_trait::async_trait]
+impl TeeAttestationProofProvider for BoundlessProver {
     /// Generates a proof with deterministic request-ID recovery.
     ///
     /// Before submitting a new proof request, this method probes up to
@@ -452,7 +455,7 @@ impl AttestationProofProvider for BoundlessProver {
         &self,
         attestation_bytes: &[u8],
         signer_address: Address,
-    ) -> Result<AttestationProof> {
+    ) -> base_proof_tee_attestation::Result<TeeAttestationProof> {
         let (client, params) = self.build_client_and_params(attestation_bytes).await?;
 
         let recovery_is_blocked = self
@@ -687,7 +690,7 @@ impl AttestationProofProvider for BoundlessProver {
             }
         };
 
-        self.submit_and_wait(&client, params).await
+        Ok(self.submit_and_wait(&client, params).await?)
     }
 
     fn block_recovery_for_signer(&self, signer: Address) {

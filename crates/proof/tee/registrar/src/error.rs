@@ -1,4 +1,4 @@
-use base_proof_tee_nitro_attestation_prover::ProverError;
+use base_proof_tee_attestation::BoxError;
 use base_tx_manager::TxManagerError;
 use thiserror::Error;
 
@@ -58,9 +58,9 @@ pub enum RegistrarError {
     Crl(#[from] crate::crl::CrlError),
 }
 
-impl From<ProverError> for RegistrarError {
-    fn from(e: ProverError) -> Self {
-        Self::ProofGeneration(Box::new(e))
+impl From<BoxError> for RegistrarError {
+    fn from(e: BoxError) -> Self {
+        Self::ProofGeneration(e)
     }
 }
 

@@ -5168,6 +5168,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "base-proof-tee-attestation"
+version = "0.0.0"
+dependencies = [
+ "alloy-primitives",
+ "async-trait",
+ "base-proof-contracts",
+ "rstest",
+ "tokio",
+]
+
+[[package]]
 name = "base-proof-tee-nitro-attestation-prover"
 version = "0.0.0"
 dependencies = [
@@ -5175,6 +5186,7 @@ dependencies = [
  "alloy-signer-local",
  "anyhow",
  "async-trait",
+ "base-proof-tee-attestation",
  "base-proof-tee-nitro-verifier",
  "boundless-market",
  "risc0-ethereum-contracts",
@@ -5276,7 +5288,7 @@ dependencies = [
  "base-metrics",
  "base-proof-contracts",
  "base-proof-primitives",
- "base-proof-tee-nitro-attestation-prover",
+ "base-proof-tee-attestation",
  "base-proof-tee-nitro-verifier",
  "base-tx-manager",
  "futures",
@@ -5310,6 +5322,7 @@ dependencies = [
  "base-balance-monitor",
  "base-cli-utils",
  "base-health",
+ "base-proof-tee-attestation",
  "base-proof-tee-nitro-attestation-prover",
  "base-proof-tee-registrar",
  "base-tx-manager",

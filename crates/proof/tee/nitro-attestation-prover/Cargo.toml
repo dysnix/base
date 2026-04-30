@@ -15,10 +15,9 @@ workspace = true
 # Verification types (always available)
 base-proof-tee-nitro-verifier.workspace = true
 
-# Types / traits (always available)
+# Shared proof model and errors (always available)
 thiserror.workspace = true
-async-trait.workspace = true
-alloy-primitives.workspace = true
+base-proof-tee-attestation.workspace = true
 
 # Proving backends (behind `prove` feature). This serves two purposes:
 # 1. Avoids pulling in risc0-sys and its Metal kernel build on macOS
@@ -26,6 +25,8 @@ alloy-primitives.workspace = true
 #    (e.g. the registrar library compiles in seconds without `prove`)
 url = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+alloy-primitives = { workspace = true, optional = true }
 boundless-market = { workspace = true, optional = true }
 alloy-signer-local = { workspace = true, optional = true }
 risc0-ethereum-contracts = { workspace = true, optional = true }
@@ -39,7 +40,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
 prove = [
+	"dep:alloy-primitives",
 	"dep:alloy-signer-local",
+	"dep:async-trait",
 	"dep:boundless-market",
 	"dep:risc0-ethereum-contracts",
 	"dep:risc0-zkvm",

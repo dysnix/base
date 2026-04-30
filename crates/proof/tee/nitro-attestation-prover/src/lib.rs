@@ -2,10 +2,10 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 mod error;
+pub use base_proof_tee_attestation::{
+    TeeAttestationKind, TeeAttestationProof, TeeAttestationProofProvider,
+};
 pub use error::{ProverError, Result};
-
-mod types;
-pub use types::{AttestationProof, AttestationProofProvider};
 
 // Prover implementations are behind the `prove` feature to avoid pulling in
 // risc0-sys (Metal kernel builds on macOS) and to reduce compile times for
