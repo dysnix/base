@@ -1,7 +1,6 @@
 //! Shared runtime state for the vibenet faucet HTTP service.
 
-use std::net::IpAddr;
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 
 use alloy_network::{Ethereum, EthereumWallet};
 use alloy_primitives::Address;
@@ -13,8 +12,7 @@ use alloy_provider::{
 };
 use eyre::Result;
 
-use crate::config::FaucetConfig;
-use crate::limiter::Limiter;
+use crate::{config::FaucetConfig, limiter::Limiter};
 
 /// Concrete provider type used by the faucet. Mirrors the stack installed by
 /// [`ProviderBuilder::new`] (recommended fillers) plus our wallet filler so we

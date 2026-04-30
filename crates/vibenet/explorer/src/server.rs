@@ -7,16 +7,8 @@
 //! No response is cached; SQLite is only used for the queries the node
 //! cannot answer.
 
-use crate::{
-    config::ExplorerConfig,
-    models::{
-        ActivityItem, AddressDetail, BlockDetail, BlockListItem, PageCtx, StatsBlock, TxBlockMeta,
-        TxDetail, TxListItem, format_eth,
-    },
-    rpc_proxy::RpcClient,
-    storage::Storage,
-    trace::TraceNode,
-};
+use std::{net::SocketAddr, sync::Arc};
+
 use alloy_primitives::{Address, B256};
 use askama::Template;
 use axum::{
@@ -28,8 +20,18 @@ use axum::{
 };
 use eyre::Result;
 use serde::Deserialize;
-use std::{net::SocketAddr, sync::Arc};
 use tower_http::trace::TraceLayer;
+
+use crate::{
+    config::ExplorerConfig,
+    models::{
+        ActivityItem, AddressDetail, BlockDetail, BlockListItem, PageCtx, StatsBlock, TxBlockMeta,
+        TxDetail, TxListItem, format_eth,
+    },
+    rpc_proxy::RpcClient,
+    storage::Storage,
+    trace::TraceNode,
+};
 
 /// Bundled CSS, baked in at build time so the container has nothing to mount.
 const STYLE_CSS: &str = include_str!("../static/style.css");
@@ -86,7 +88,11 @@ impl Explorer {
             .with_state(self.state)
     }
 
-    pub async fn serve(self, addr: SocketAddr, shutdown: tokio::sync::watch::Receiver<bool>) -> Result<()> {
+    pub async fn serve(
+        self,
+        addr: SocketAddr,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<()> {
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!(%addr, "vibescan listening");
         let router = self.into_router();
@@ -185,10 +191,7 @@ async fn home(State(state): State<Arc<AppState>>) -> Response {
     })
 }
 
-async fn block_detail(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Response {
+async fn block_detail(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     let block = match parse_block_id(&id) {
         Ok(BlockLookup::Number(n)) => state.rpc.block_by_number(n).await,
         Ok(BlockLookup::Hash(h)) => state.rpc.block_by_hash(h).await,
@@ -259,10 +262,7 @@ async fn tx_raw(State(state): State<Arc<AppState>>, Path(hash): Path<String>) ->
     }
 }
 
-async fn tx_receipt_raw(
-    State(state): State<Arc<AppState>>,
-    Path(hash): Path<String>,
-) -> Response {
+async fn tx_receipt_raw(State(state): State<Arc<AppState>>, Path(hash): Path<String>) -> Response {
     let h = match parse_hash(&hash) {
         Ok(h) => h,
         Err(err) => return render_error(&state.ctx, 400, err),
@@ -311,9 +311,7 @@ async fn tx_trace(State(state): State<Arc<AppState>>, Path(hash): Path<String>) 
                 back_href: format!("/tx/{hash}"),
                 total_calls: 0,
                 trace_html: String::new(),
-                unavailable: Some(
-                    "The node returned a trace in an unexpected format.".to_string(),
-                ),
+                unavailable: Some("The node returned a trace in an unexpected format.".to_string()),
             }),
         },
         Err(err) => {
@@ -361,13 +359,10 @@ async fn address_detail(
     let nonce = nonce.unwrap_or(0);
     let code = code.unwrap_or_default();
 
-    let activity = state
-        .storage
-        .activity_for(address, before, 50)
-        .await
-        .unwrap_or_default();
+    let activity = state.storage.activity_for(address, before, 50).await.unwrap_or_default();
 
-    let next_cursor = activity.last().map(|a| format!("{}-{}-{}", a.block_num, a.tx_index, a.log_index));
+    let next_cursor =
+        activity.last().map(|a| format!("{}-{}-{}", a.block_num, a.tx_index, a.log_index));
     let activity_items: Vec<ActivityItem> = activity.into_iter().map(Into::into).collect();
 
     let addr_detail = AddressDetail {
@@ -403,8 +398,10 @@ async fn search(State(state): State<Arc<AppState>>, Query(q): Query<SearchQ>) ->
         40 => Redirect::to(&format!("/address/0x{normalized}")).into_response(),
         64 => {
             // Could be a block hash or a tx hash; try tx first, fall through.
-            if let Ok(Some(_)) =
-                state.rpc.tx_by_hash(parse_hash(&format!("0x{normalized}")).unwrap_or_default()).await
+            if let Ok(Some(_)) = state
+                .rpc
+                .tx_by_hash(parse_hash(&format!("0x{normalized}")).unwrap_or_default())
+                .await
             {
                 return Redirect::to(&format!("/tx/0x{normalized}")).into_response();
             }
@@ -539,8 +536,9 @@ fn parse_cursor(s: &str) -> std::result::Result<(u64, u64, i64), String> {
 fn render_html<T: Template>(tmpl: T) -> Response {
     match tmpl.render() {
         Ok(s) => Html(s).into_response(),
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {err}"))
-            .into_response(),
+        Err(err) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {err}")).into_response()
+        }
     }
 }
 
@@ -559,13 +557,14 @@ fn render_raw(
 fn render_error(ctx: &PageCtx, status: u16, message: String) -> Response {
     let body = ErrorTmpl { ctx: ctx.clone(), status, message: message.clone() };
     match body.render() {
-        Ok(s) => (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), Html(s))
-            .into_response(),
-        Err(_) => (
-            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            message,
-        )
-            .into_response(),
+        Ok(s) => {
+            (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), Html(s))
+                .into_response()
+        }
+        Err(_) => {
+            (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), message)
+                .into_response()
+        }
     }
 }
 
@@ -582,10 +581,7 @@ async fn serve_css() -> Response {
 /// returning the same PNG bytes.
 async fn serve_favicon() -> Response {
     (
-        [
-            (header::CONTENT_TYPE, "image/png"),
-            (header::CACHE_CONTROL, "public, max-age=604800"),
-        ],
+        [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=604800")],
         FAVICON_PNG,
     )
         .into_response()

@@ -1,7 +1,9 @@
 //! HTTP server wiring for the vibenet faucet.
 
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
+use std::{
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+};
 
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{Address, Bytes, TxHash, U256};
@@ -35,7 +37,7 @@ sol! {
 }
 
 /// Header nginx attaches with the real client IP it derived from
-/// `X-Forwarded-For` after real_ip processing. Used as the primary signal.
+/// `X-Forwarded-For` after `real_ip` processing. Used as the primary signal.
 const X_REAL_IP: &str = "x-real-ip";
 
 /// Legacy header from the Cloudflare-tunnel era, kept as a fallback so old

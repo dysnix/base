@@ -2,15 +2,17 @@
 //! so we keep all the formatting logic in one place and avoid pushing any
 //! storage types into the presentation layer.
 
-use crate::{
-    rpc_proxy::{BaseBlock, BaseReceipt, BaseTransaction},
-    storage::{ActivityRole, ActivityRow, BlockRow, Stats, TxRow},
-};
+use std::fmt;
+
 use alloy_consensus::Typed2718 as _;
 use alloy_network_primitives::{ReceiptResponse as _, TransactionResponse as _};
 use alloy_primitives::{Address, B256, U256};
 use alloy_rpc_types_eth::TransactionTrait as _;
-use std::fmt;
+
+use crate::{
+    rpc_proxy::{BaseBlock, BaseReceipt, BaseTransaction},
+    storage::{ActivityRole, ActivityRow, BlockRow, Stats, TxRow},
+};
 
 /// Common footer/context fields present on every rendered page.
 #[derive(Debug, Clone)]

@@ -5,12 +5,13 @@
 //! without any caching and without going through proxyd (which would make
 //! the explorer eat its own rate limits).
 
+use std::sync::Arc;
+
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_provider::{Provider, ProviderBuilder, RootProvider};
 use alloy_rpc_types_eth::BlockId;
 use base_common_network::Base;
 use eyre::{Result, WrapErr};
-use std::sync::Arc;
 
 /// RPC response alias for full blocks on the Base network. OP deposit txs
 /// (type 0x7e) will deserialize correctly through this because [`Base`]

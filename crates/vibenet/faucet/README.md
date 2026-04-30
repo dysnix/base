@@ -27,14 +27,3 @@ Exposes:
 | `VIBENET_FAUCET_USDV_DRIP_UNITS` | no | `1000000000` | USDV minted per drip (1000 USDV, 6 decimals). |
 | `VIBENET_FAUCET_IP_COOLDOWN_SECS` | no | `3600` | Per-IP cooldown, applied independently per asset. |
 | `VIBENET_FAUCET_ADDR_COOLDOWN_SECS` | no | `3600` | Per-destination cooldown, applied independently per asset. |
-
-## Security
-
-- Real client IP is taken from `X-Real-IP` (populated by the nginx gateway
-  after its `X-Forwarded-For` real_ip processing), falling back to the
-  legacy `CF-Connecting-IP` header and finally the connecting peer IP.
-- The private key is only ever read from the environment. It is never logged,
-  emitted in errors, or surfaced through `/status`.
-- Cooldown state lives in memory only; restarting the service resets all
-  cooldowns. This is acceptable for vibenet since restarts wipe chain state
-  too.

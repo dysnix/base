@@ -2,11 +2,7 @@
 //! and waits for SIGINT/SIGTERM for a clean shutdown.
 
 use base_vibenet_explorer::{
-    ExplorerConfig,
-    indexer::Indexer,
-    rpc_proxy::RpcClient,
-    server::Explorer,
-    storage::Storage,
+    ExplorerConfig, indexer::Indexer, rpc_proxy::RpcClient, server::Explorer, storage::Storage,
 };
 use eyre::{Result, WrapErr};
 use tokio::signal;
@@ -74,7 +70,7 @@ fn init_tracing() {
 
 /// No-op placeholder; color-eyre is not a workspace dep so we rely on plain
 /// eyre reports. Keeps the main fn readable for future hook points.
-fn color_eyre_or_anyhow_noop() {}
+const fn color_eyre_or_anyhow_noop() {}
 
 async fn wait_for_shutdown() {
     let ctrl_c = async {

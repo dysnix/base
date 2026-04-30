@@ -10,10 +10,12 @@
 //! emit pre-built HTML with native `<details>` elements for collapse/expand.
 //! No JavaScript, and the tree degrades gracefully if a user disables it.
 
-use crate::models::{AddrLabel, format_eth};
+use std::fmt::Write;
+
 use alloy_primitives::{Address, U256};
 use serde_json::Value;
-use std::fmt::Write;
+
+use crate::models::{AddrLabel, format_eth};
 
 /// One call frame in the trace tree.
 pub struct TraceNode {
@@ -35,7 +37,7 @@ pub struct TraceNode {
     pub output_bytes: usize,
     pub error: Option<String>,
     pub revert_reason: Option<String>,
-    pub children: Vec<TraceNode>,
+    pub children: Vec<Self>,
 }
 
 impl TraceNode {
@@ -43,11 +45,7 @@ impl TraceNode {
     /// are missing — the caller should treat that as "trace not available".
     pub fn from_json(v: &Value) -> Option<Self> {
         let obj = v.as_object()?;
-        let call_type = obj
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("CALL")
-            .to_string();
+        let call_type = obj.get("type").and_then(Value::as_str).unwrap_or("CALL").to_string();
         let from_str = obj.get("from").and_then(Value::as_str).unwrap_or("");
         let from = parse_addr_label(from_str)?;
         let to = obj.get("to").and_then(Value::as_str).and_then(parse_addr_label);
@@ -63,16 +61,14 @@ impl TraceNode {
         let input_hex = obj.get("input").and_then(Value::as_str).unwrap_or("0x");
         let (input_full, input_preview, input_bytes, selector) = split_hex(input_hex);
 
-        let (output_full, output_preview, output_bytes) = match obj
-            .get("output")
-            .and_then(Value::as_str)
-        {
-            Some(s) if !s.is_empty() && s != "0x" => {
-                let (full, preview, bytes, _) = split_hex(s);
-                (Some(full), Some(preview), bytes)
-            }
-            _ => (None, None, 0),
-        };
+        let (output_full, output_preview, output_bytes) =
+            match obj.get("output").and_then(Value::as_str) {
+                Some(s) if !s.is_empty() && s != "0x" => {
+                    let (full, preview, bytes, _) = split_hex(s);
+                    (Some(full), Some(preview), bytes)
+                }
+                _ => (None, None, 0),
+            };
 
         let error = obj.get("error").and_then(Value::as_str).map(String::from);
         let revert_reason = obj.get("revertReason").and_then(Value::as_str).map(String::from);
@@ -80,7 +76,7 @@ impl TraceNode {
         let children = obj
             .get("calls")
             .and_then(Value::as_array)
-            .map(|arr| arr.iter().filter_map(TraceNode::from_json).collect())
+            .map(|arr| arr.iter().filter_map(Self::from_json).collect())
             .unwrap_or_default();
 
         Some(Self {
@@ -104,7 +100,7 @@ impl TraceNode {
 
     /// Total number of call frames in the subtree (including self).
     pub fn total_calls(&self) -> usize {
-        1 + self.children.iter().map(TraceNode::total_calls).sum::<usize>()
+        1 + self.children.iter().map(Self::total_calls).sum::<usize>()
     }
 
     /// Render the whole tree to HTML. Top-level node is open by default;
@@ -121,14 +117,20 @@ impl TraceNode {
         let cls = format!("call-{}", self.call_type.to_lowercase());
         let has_error = self.error.is_some() || self.revert_reason.is_some();
 
-        let _ = write!(out, r#"<details class="trace-node{err}"{open}>"#,
+        let _ = write!(
+            out,
+            r#"<details class="trace-node{err}"{open}>"#,
             err = if has_error { " trace-node-err" } else { "" },
-            open = open);
+            open = open
+        );
 
         // --- summary line ---
-        let _ = write!(out, r#"<summary><span class="call-type {cls}">{ty}</span>"#,
+        let _ = write!(
+            out,
+            r#"<summary><span class="call-type {cls}">{ty}</span>"#,
             cls = cls,
-            ty = html_escape(&self.call_type));
+            ty = html_escape(&self.call_type)
+        );
 
         // Use the full 40-char address in trace summaries so devs can diff
         // frames by eye without hovering each row. `code.addr` matches the
@@ -158,9 +160,12 @@ impl TraceNode {
             let _ = write!(out, r#" <span class="dim">· {g} gas</span>"#);
         }
         if !self.children.is_empty() {
-            let _ = write!(out, r#" <span class="dim">· {} subcall{}</span>"#,
+            let _ = write!(
+                out,
+                r#" <span class="dim">· {} subcall{}</span>"#,
                 self.children.len(),
-                if self.children.len() == 1 { "" } else { "s" });
+                if self.children.len() == 1 { "" } else { "s" }
+            );
         }
         if has_error {
             out.push_str(r#" <span class="trace-err-badge">error</span>"#);
@@ -171,12 +176,10 @@ impl TraceNode {
         out.push_str(r#"<div class="trace-body">"#);
 
         if self.input_bytes > 0 {
-            let _ = write!(
-                out,
-                r#"<div class="trace-row"><span class="trace-label">input</span>"#
-            );
+            let _ = write!(out, r#"<div class="trace-row"><span class="trace-label">input</span>"#);
             if self.input_full == self.input_preview {
-                let _ = write!(out, r#"<code class="wrap">{}</code>"#, html_escape(&self.input_full));
+                let _ =
+                    write!(out, r#"<code class="wrap">{}</code>"#, html_escape(&self.input_full));
             } else {
                 let _ = write!(
                     out,
@@ -190,10 +193,8 @@ impl TraceNode {
         }
 
         if let (Some(full), Some(preview)) = (&self.output_full, &self.output_preview) {
-            let _ = write!(
-                out,
-                r#"<div class="trace-row"><span class="trace-label">output</span>"#
-            );
+            let _ =
+                write!(out, r#"<div class="trace-row"><span class="trace-label">output</span>"#);
             if full == preview {
                 let _ = write!(out, r#"<code class="wrap">{}</code>"#, html_escape(full));
             } else {
@@ -260,16 +261,8 @@ fn split_hex(hex_str: &str) -> (String, String, usize, Option<String>) {
     let bytes = inner.len() / 2;
     let full = format!("0x{inner}");
     // Preview: up to 64 hex chars, else truncate with "…".
-    let preview = if inner.len() <= 64 {
-        full.clone()
-    } else {
-        format!("0x{}…", &inner[..64])
-    };
-    let selector = if inner.len() >= 8 {
-        Some(format!("0x{}", &inner[..8]))
-    } else {
-        None
-    };
+    let preview = if inner.len() <= 64 { full.clone() } else { format!("0x{}…", &inner[..64]) };
+    let selector = if inner.len() >= 8 { Some(format!("0x{}", &inner[..8])) } else { None };
     (full, preview, bytes, selector)
 }
 
@@ -290,4 +283,3 @@ fn html_escape(s: &str) -> String {
     }
     out
 }
-

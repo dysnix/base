@@ -1,13 +1,14 @@
 //! SQLite storage layer. All SQL lives here so the rest of the crate can
 //! pretend the DB is just a typed API.
 
+use std::{path::Path, str::FromStr};
+
 use alloy_primitives::{Address, B256, U256};
 use eyre::{Result, WrapErr};
 use sqlx::{
     ConnectOptions, Pool, Sqlite,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
-use std::{path::Path, str::FromStr};
 
 /// Role column values. Kept in sync with `migrations/0001_init.sql`.
 #[repr(i64)]
@@ -89,9 +90,9 @@ impl Storage {
         let path = path.as_ref();
         if let Some(dir) = path.parent() {
             if !dir.as_os_str().is_empty() {
-                tokio::fs::create_dir_all(dir).await.wrap_err_with(|| {
-                    format!("creating db parent dir {}", dir.display())
-                })?;
+                tokio::fs::create_dir_all(dir)
+                    .await
+                    .wrap_err_with(|| format!("creating db parent dir {}", dir.display()))?;
             }
         }
 
@@ -126,11 +127,10 @@ impl Storage {
     /// resurrected situation where our cursor points at blocks that no
     /// longer exist upstream.
     pub async fn block_hash(&self, number: u64) -> Result<Option<B256>> {
-        let row: Option<(Vec<u8>,)> =
-            sqlx::query_as("SELECT hash FROM blocks WHERE number = ?")
-                .bind(number as i64)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT hash FROM blocks WHERE number = ?")
+            .bind(number as i64)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.map(|(h,)| B256::from_slice(&h)))
     }
 
@@ -299,8 +299,7 @@ impl Storage {
     pub async fn stats(&self) -> Result<Stats> {
         let blocks: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM blocks").fetch_one(&self.pool).await?;
-        let txs: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM txs").fetch_one(&self.pool).await?;
+        let txs: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM txs").fetch_one(&self.pool).await?;
         let addresses: (i64,) =
             sqlx::query_as("SELECT COUNT(DISTINCT address) FROM address_activity")
                 .fetch_one(&self.pool)

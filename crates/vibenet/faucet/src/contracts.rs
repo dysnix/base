@@ -6,8 +6,7 @@
 //! this file on every USDV drip so it picks up new deploys without
 //! restarting.
 
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use alloy_primitives::Address;
 use serde::Deserialize;

@@ -13,20 +13,21 @@
 //! do assert `block.parentHash == stored_prev.hash` as a cheap correctness
 //! check and refuse to proceed on mismatch. That's enough for devnet.
 
+use std::time::Duration;
+
+use alloy_network_primitives::{ReceiptResponse as _, TransactionResponse as _};
+use alloy_primitives::{Address, B256, U256, b256};
+use alloy_provider::{Provider, ProviderBuilder, RootProvider};
+use alloy_rpc_types_eth::{BlockId, TransactionTrait as _};
+use base_common_network::Base;
+use eyre::{Result, WrapErr, eyre};
+use futures::StreamExt;
+use tracing::{debug, info, warn};
+
 use crate::{
     rpc_proxy::{BaseBlock, BaseReceipt, RpcClient},
     storage::{ActivityRole, ActivityWrite, BlockRow, BlockWrite, Storage, TxRow},
 };
-use alloy_network_primitives::{ReceiptResponse as _, TransactionResponse as _};
-use alloy_primitives::{Address, B256, U256, b256};
-use alloy_rpc_types_eth::TransactionTrait as _;
-use alloy_provider::{Provider, ProviderBuilder, RootProvider};
-use alloy_rpc_types_eth::BlockId;
-use base_common_network::Base;
-use eyre::{Result, WrapErr, eyre};
-use futures::StreamExt;
-use std::time::Duration;
-use tracing::{debug, info, warn};
 
 /// `keccak256("Transfer(address,address,uint256)")`. Covers ERC-20 and
 /// ERC-721 (ERC-721 marks from/to/id as indexed so topics.len() == 4; we
@@ -117,8 +118,8 @@ impl Indexer {
             // Process the next window of blocks in strict order. We fetch
             // blocks + receipts in parallel but insert serially so the
             // cursor advances monotonically.
-            let window: Vec<u64> = (next..=head.min(next + self.backfill_concurrency as u64 - 1))
-                .collect();
+            let window: Vec<u64> =
+                (next..=head.min(next + self.backfill_concurrency as u64 - 1)).collect();
             let window_len = window.len() as u64;
 
             let fetched = futures::stream::iter(window.iter().copied())
@@ -165,10 +166,7 @@ impl Indexer {
 
     /// Subscribe to newHeads; re-fetch each announced block as full (the
     /// subscription payload only carries the header).
-    async fn stream_live(
-        self,
-        mut shutdown: tokio::sync::watch::Receiver<bool>,
-    ) -> Result<()> {
+    async fn stream_live(self, mut shutdown: tokio::sync::watch::Receiver<bool>) -> Result<()> {
         loop {
             if *shutdown.borrow() {
                 return Ok(());
@@ -204,10 +202,7 @@ impl Indexer {
             .root()
             .clone();
 
-        let sub = ws_provider
-            .subscribe_blocks()
-            .await
-            .wrap_err("subscribing to newHeads")?;
+        let sub = ws_provider.subscribe_blocks().await.wrap_err("subscribing to newHeads")?;
         let mut stream = sub.into_stream();
         info!(ws = %self.ws_url, "live subscription established");
 
@@ -245,11 +240,8 @@ impl Indexer {
             .block_by_number(number)
             .await?
             .ok_or_else(|| eyre!("block {number} missing during live index"))?;
-        let receipts = self
-            .rpc
-            .block_receipts(BlockId::Number(number.into()))
-            .await?
-            .unwrap_or_default();
+        let receipts =
+            self.rpc.block_receipts(BlockId::Number(number.into())).await?.unwrap_or_default();
 
         // Cheap reorg guard: the parent of block N must match what we
         // stored as block N-1. A divergence on a single-sequencer devnet

@@ -1,7 +1,8 @@
 //! Parse environment variables into a typed config.
 
-use eyre::{Result, WrapErr};
 use std::{net::SocketAddr, path::PathBuf};
+
+use eyre::{Result, WrapErr};
 
 /// All configuration for the explorer. Populated from env vars; see the
 /// crate README for the full list.

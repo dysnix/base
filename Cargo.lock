@@ -1660,7 +1660,7 @@ dependencies = [
  "memchr",
  "proc-macro2",
  "quote",
- "rustc-hash",
+ "rustc-hash 2.1.2",
  "syn 2.0.117",
 ]
 
@@ -5682,7 +5682,7 @@ dependencies = [
  "alloy-provider",
  "alloy-rpc-types-eth",
  "askama",
- "axum",
+ "axum 0.8.9",
  "base-common-network",
  "base-common-rpc-types",
  "eyre",
@@ -5708,7 +5708,7 @@ dependencies = [
  "alloy-signer",
  "alloy-signer-local",
  "alloy-sol-types",
- "axum",
+ "axum 0.8.9",
  "eyre",
  "serde",
  "serde_json",

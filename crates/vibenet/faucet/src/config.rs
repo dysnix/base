@@ -1,9 +1,6 @@
 //! Environment-driven configuration for the vibenet faucet.
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::time::Duration;
+use std::{net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use alloy_primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;

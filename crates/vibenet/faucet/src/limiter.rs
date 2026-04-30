@@ -1,9 +1,11 @@
 //! In-memory cooldown tracker used for per-IP and per-address faucet limits.
 
-use std::collections::HashMap;
-use std::hash::Hash;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 /// Tracks the last time a given key was served and answers "is this key in
 /// cooldown right now?" queries.
