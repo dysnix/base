@@ -179,6 +179,53 @@ skip = [
     "tracing-subscriber",
     "wasm-streams",
     "zip",
+
+    # RustCrypto stack mismatch: upstream deps pull in both the stable 0.x line
+    # and the in-flight 0.x+1.0-rc.* prereleases simultaneously.
+    "aead",
+    "aes",
+    "aes-gcm",
+    "base16ct",
+    "block-padding",
+    "cbc",
+    "chacha20",
+    "cipher",
+    "cpufeatures",
+    "crypto-bigint",
+    "ctr",
+    "curve25519-dalek",
+    "der",
+    "ecdsa",
+    "ed25519",
+    "ed25519-dalek",
+    "elliptic-curve",
+    "fiat-crypto",
+    "ghash",
+    "hex-literal",
+    "hkdf",
+    "hmac",
+    "inout",
+    "keccak",
+    "p256",
+    "p384",
+    "pbkdf2",
+    "pem-rfc7468",
+    "pkcs8",
+    "polyval",
+    "primeorder",
+    "rfc6979",
+    "sec1",
+    "sha2",
+    "sha3",
+    "spki",
+    "universal-hash",
+
+    # JNI stack mismatch from upstream deps
+    "jni",
+    "jni-sys",
+
+    # wit-bindgen mismatch from upstream wasm deps
+    "wit-bindgen",
 ]
 
 [sources]
