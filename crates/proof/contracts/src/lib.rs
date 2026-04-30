@@ -35,5 +35,11 @@ pub use tee_prover_registry::{
 mod nitro_enclave_verifier;
 pub use nitro_enclave_verifier::INitroEnclaveVerifier;
 
+mod tdx_verifier;
+pub use tdx_verifier::{
+    ITDXTEEProverRegistry, ITDXVerifier, TDXTcbStatus, TDXVerificationResult, TDXVerifierJournal,
+    ZkCoProcessorConfig, ZkCoProcessorType,
+};
+
 mod error;
 pub use error::ContractError;
