@@ -133,6 +133,12 @@ th {
   background: var(--bg-elev);
 }
 tr:last-child td { border-bottom: none; }
+.live-table code.addr a {
+  white-space: nowrap;
+}
+.live-row-new td {
+  animation: live-row-highlight 1.2s ease-out;
+}
 
 .stats {
   display: grid;
@@ -159,6 +165,25 @@ tr:last-child td { border-bottom: none; }
 .stat .value {
   font-family: var(--mono);
   font-size: 20px;
+}
+.live-stat-updated {
+  animation: live-stat-highlight 0.9s ease-out;
+}
+
+@keyframes live-row-highlight {
+  0% { background: rgba(0, 82, 255, 0.24); }
+  100% { background: transparent; }
+}
+
+@keyframes live-stat-highlight {
+  0% {
+    border-color: rgba(0, 82, 255, 0.9);
+    box-shadow: 0 0 0 2px rgba(0, 82, 255, 0.18);
+  }
+  100% {
+    border-color: var(--border);
+    box-shadow: none;
+  }
 }
 
 .two-col {

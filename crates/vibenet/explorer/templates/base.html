@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}vibescan{% endblock %}</title>
   <link rel="icon" type="image/png" href="/static/favicon.png" />
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v={{ ctx.commit }}" />
 </head>
 <body>
   <header class="site-header">
