@@ -27,9 +27,7 @@ use eyre::{Result, WrapErr};
 use serde::Serialize;
 use tokio::time::{sleep, timeout};
 use tracing::{Event, Subscriber, field::Visit};
-use tracing_subscriber::{
-    EnvFilter, Layer, layer::Context, prelude::*, registry::LookupSpan,
-};
+use tracing_subscriber::{EnvFilter, Layer, layer::Context, prelude::*, registry::LookupSpan};
 
 const L1_CHAIN_ID: u64 = 1337;
 const L2_CHAIN_ID: u64 = 84538453;
