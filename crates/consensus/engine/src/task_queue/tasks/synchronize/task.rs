@@ -165,6 +165,7 @@ impl<EngineClient_: EngineClient> EngineTaskExt for SynchronizeTask<EngineClient
         debug!(
             target: "engine",
             fcu_duration = ?fcu_duration,
+            fcu_duration_us = fcu_duration.as_micros() as u64,
             forkchoice = ?forkchoice,
             ?confirmed,
             response = ?valid_response,

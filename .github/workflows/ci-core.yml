@@ -313,7 +313,17 @@ jobs:
       - name: Pre-pull docker images
         run: just devnet pull-images
       - name: Run devnet tests
+        env:
+          FCU_LATENCY_OUTPUT: ${{ runner.temp }}/fcu_latency.json
         run: just devnet tests-ci
+      - name: Upload FCU latency summary
+        if: always()
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        with:
+          name: fcu-latency
+          path: ${{ runner.temp }}/fcu_latency.json
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Check for JUnit testcases
         if: always()
         id: junit-results

@@ -89,3 +89,6 @@ alloy-consensus = { workspace = true, features = ["std"] }
 
 # base-alloy
 base-common-rpc-types.workspace = true
+
+# tracing capture
+tracing-subscriber = { workspace = true, features = ["env-filter", "registry", "fmt"] }
