@@ -13,14 +13,18 @@ use alloy_rpc_types_eth::BlockId;
 use base_common_network::Base;
 use eyre::{Result, WrapErr};
 
-/// RPC response alias for full blocks on the Base network. OP deposit txs
-/// (type 0x7e) will deserialize correctly through this because [`Base`]
-/// points [`alloy_network::Network::TransactionResponse`] at
+/// RPC response alias for full blocks on the Base network.
+pub type BaseBlock = <Base as alloy_network::Network>::BlockResponse;
+
+/// RPC response alias for Base transactions. OP deposit txs (type `0x7e`)
+/// deserialize correctly because [`Base`] points
+/// [`alloy_network::Network::TransactionResponse`] at
 /// `base_common_rpc_types::Transaction`, which knows about
 /// [`base_common_consensus::BaseTxEnvelope`].
-pub(crate) type BaseBlock = <Base as alloy_network::Network>::BlockResponse;
-pub(crate) type BaseTransaction = <Base as alloy_network::Network>::TransactionResponse;
-pub(crate) type BaseReceipt = <Base as alloy_network::Network>::ReceiptResponse;
+pub type BaseTransaction = <Base as alloy_network::Network>::TransactionResponse;
+
+/// RPC response alias for Base transaction receipts.
+pub type BaseReceipt = <Base as alloy_network::Network>::ReceiptResponse;
 
 /// HTTP JSON-RPC client for explorer read-through queries.
 #[derive(Clone)]

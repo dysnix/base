@@ -17,70 +17,76 @@ type ActivityDbRow = (i64, i64, i64, Vec<u8>, i64, Option<Vec<u8>>);
 /// Role column values. Kept in sync with `migrations/0001_init.sql`.
 #[repr(i64)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ActivityRole {
+pub enum ActivityRole {
+    /// Transaction sender.
     Sender = 0,
+    /// Transaction recipient / called address.
     Recipient = 1,
+    /// Contract created by a transaction.
     Creator = 2,
+    /// Token transfer sender from a log.
     LogFrom = 3,
+    /// Token transfer recipient from a log.
     LogTo = 4,
 }
 
 /// Compact representation of a block row for listings.
 #[derive(Debug, Clone)]
-pub(crate) struct BlockRow {
-    pub number: u64,
-    pub hash: B256,
-    pub timestamp: u64,
-    pub miner: Address,
-    pub tx_count: u64,
-    pub gas_used: u64,
-    pub gas_limit: u64,
-    pub base_fee: Option<U256>,
+pub struct BlockRow {
+    pub(crate) number: u64,
+    pub(crate) hash: B256,
+    pub(crate) timestamp: u64,
+    pub(crate) miner: Address,
+    pub(crate) tx_count: u64,
+    pub(crate) gas_used: u64,
+    pub(crate) gas_limit: u64,
+    pub(crate) base_fee: Option<U256>,
 }
 
 /// Compact representation of a tx row for listings.
 #[derive(Debug, Clone)]
-pub(crate) struct TxRow {
-    pub hash: B256,
-    pub block_num: u64,
-    pub tx_index: u64,
-    pub from_addr: Address,
-    pub to_addr: Option<Address>,
-    pub value: U256,
-    pub status: u8,
-    pub created: Option<Address>,
+pub struct TxRow {
+    pub(crate) hash: B256,
+    pub(crate) block_num: u64,
+    pub(crate) tx_index: u64,
+    pub(crate) from_addr: Address,
+    pub(crate) to_addr: Option<Address>,
+    pub(crate) value: U256,
+    pub(crate) status: u8,
+    pub(crate) created: Option<Address>,
 }
 
 /// One row in the activity feed for an address.
 #[derive(Debug, Clone)]
-pub(crate) struct ActivityRow {
-    pub block_num: u64,
-    pub tx_index: u64,
-    pub log_index: i64,
-    pub tx_hash: B256,
-    pub role: ActivityRole,
-    pub token: Option<Address>,
+pub struct ActivityRow {
+    pub(crate) block_num: u64,
+    pub(crate) tx_index: u64,
+    pub(crate) log_index: i64,
+    pub(crate) tx_hash: B256,
+    pub(crate) role: ActivityRole,
+    pub(crate) token: Option<Address>,
 }
 
 /// Buffered writes for a single block. The indexer assembles one of these
 /// per block and hands it to [`Storage::insert_block`] in a single
 /// transaction, so a block either lands atomically or not at all.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct BlockWrite {
-    pub block: Option<BlockRow>,
-    pub txs: Vec<TxRow>,
-    pub activity: Vec<ActivityWrite>,
+pub struct BlockWrite {
+    pub(crate) block: Option<BlockRow>,
+    pub(crate) txs: Vec<TxRow>,
+    pub(crate) activity: Vec<ActivityWrite>,
 }
 
+/// One derived address activity row to insert for a block.
 #[derive(Debug, Clone)]
-pub(crate) struct ActivityWrite {
-    pub address: Address,
-    pub block_num: u64,
-    pub tx_index: u64,
-    pub log_index: i64,
-    pub tx_hash: B256,
-    pub role: ActivityRole,
-    pub token: Option<Address>,
+pub struct ActivityWrite {
+    pub(crate) address: Address,
+    pub(crate) block_num: u64,
+    pub(crate) tx_index: u64,
+    pub(crate) log_index: i64,
+    pub(crate) tx_hash: B256,
+    pub(crate) role: ActivityRole,
+    pub(crate) token: Option<Address>,
 }
 
 /// SQLite-backed address activity index used by the explorer.
@@ -308,10 +314,11 @@ impl Storage {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Stats {
-    pub blocks: u64,
-    pub txs: u64,
-    pub addresses: u64,
+/// Aggregate counts for the explorer home page.
+pub struct Stats {
+    pub(crate) blocks: u64,
+    pub(crate) txs: u64,
+    pub(crate) addresses: u64,
 }
 
 fn row_to_block(

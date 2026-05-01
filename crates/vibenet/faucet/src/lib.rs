@@ -13,4 +13,3 @@ mod server;
 pub use server::FaucetServer;
 
 mod contracts;
-pub use contracts::lookup;

@@ -52,7 +52,9 @@ impl ExplorerConfig {
             db_path: require("VIBESCAN_DB_PATH")?.into(),
             bind: require_parsed("VIBESCAN_BIND")?,
             start_block: optional_parsed("VIBESCAN_START_BLOCK")?.unwrap_or(0),
-            backfill_concurrency: optional_parsed("VIBESCAN_BACKFILL_CONCURRENCY")?.unwrap_or(16),
+            backfill_concurrency: optional_parsed("VIBESCAN_BACKFILL_CONCURRENCY")?
+                .unwrap_or(16)
+                .max(1),
             public_rpc_url: std::env::var("VIBESCAN_PUBLIC_RPC_URL").ok().filter(|s| !s.is_empty()),
             public_faucet_url: std::env::var("VIBESCAN_PUBLIC_FAUCET_URL")
                 .ok()

@@ -18,26 +18,27 @@ use serde_json::Value;
 use crate::models::{AddrLabel, format_eth};
 
 /// One call frame in the trace tree.
-pub(crate) struct TraceNode {
-    pub call_type: String,
-    pub from: AddrLabel,
-    pub to: Option<AddrLabel>,
+#[derive(Debug)]
+pub struct TraceNode {
+    pub(crate) call_type: String,
+    pub(crate) from: AddrLabel,
+    pub(crate) to: Option<AddrLabel>,
     /// Only populated when `value > 0`.
-    pub value_eth: Option<String>,
-    pub gas_used: Option<u64>,
+    pub(crate) value_eth: Option<String>,
+    pub(crate) gas_used: Option<u64>,
     /// First 4 bytes of input as `0x########`, if input is at least that long.
-    pub selector: Option<String>,
+    pub(crate) selector: Option<String>,
     /// `0x{hex}` preview (first 64 hex chars) followed by `… (N bytes)`, or
     /// the full hex if it's short.
-    pub input_preview: String,
-    pub input_full: String,
-    pub input_bytes: usize,
-    pub output_preview: Option<String>,
-    pub output_full: Option<String>,
-    pub output_bytes: usize,
-    pub error: Option<String>,
-    pub revert_reason: Option<String>,
-    pub children: Vec<Self>,
+    pub(crate) input_preview: String,
+    pub(crate) input_full: String,
+    pub(crate) input_bytes: usize,
+    pub(crate) output_preview: Option<String>,
+    pub(crate) output_full: Option<String>,
+    pub(crate) output_bytes: usize,
+    pub(crate) error: Option<String>,
+    pub(crate) revert_reason: Option<String>,
+    pub(crate) children: Vec<Self>,
 }
 
 impl TraceNode {

@@ -14,7 +14,7 @@ use alloy_primitives::Address;
 /// Returns `Ok(None)` when the file exists but the entry is missing (e.g.
 /// setup is still running) so callers can distinguish that from a hard
 /// filesystem error.
-pub async fn lookup(path: &Path, key: &str) -> eyre::Result<Option<Address>> {
+pub(crate) async fn lookup(path: &Path, key: &str) -> eyre::Result<Option<Address>> {
     let bytes = match tokio::fs::read(path).await {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),

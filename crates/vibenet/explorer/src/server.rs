@@ -45,7 +45,8 @@ pub struct Explorer {
     state: Arc<AppState>,
 }
 
-pub(crate) struct AppState {
+/// Shared state for explorer HTTP handlers.
+pub struct AppState {
     storage: Storage,
     rpc: RpcClient,
     ctx: PageCtx,

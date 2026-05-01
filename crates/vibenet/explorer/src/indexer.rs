@@ -13,7 +13,7 @@
 //! do assert `block.parentHash == stored_prev.hash` as a cheap correctness
 //! check and refuse to proceed on mismatch. That's enough for devnet.
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use alloy_network_primitives::{ReceiptResponse as _, TransactionResponse as _};
 use alloy_primitives::{Address, B256, U256, b256};
@@ -121,8 +121,8 @@ impl Indexer {
             // Process the next window of blocks in strict order. We fetch
             // blocks + receipts in parallel but insert serially so the
             // cursor advances monotonically.
-            let window: Vec<u64> =
-                (next..=head.min(next + self.backfill_concurrency as u64 - 1)).collect();
+            let window_size = self.backfill_concurrency.max(1) as u64;
+            let window: Vec<u64> = (next..=head.min(next + window_size - 1)).collect();
             let window_len = window.len() as u64;
 
             let fetched = futures::stream::iter(window.iter().copied())
@@ -271,6 +271,8 @@ impl Indexer {
 fn build_block_write(block: &BaseBlock, receipts: &[BaseReceipt]) -> Result<BlockWrite> {
     let header = &block.header;
     let tx_count = block.transactions.len() as u64;
+    let receipts_by_hash: HashMap<B256, &BaseReceipt> =
+        receipts.iter().map(|r| (r.transaction_hash(), r)).collect();
 
     let block_row = BlockRow {
         number: header.number,
@@ -288,7 +290,7 @@ fn build_block_write(block: &BaseBlock, receipts: &[BaseReceipt]) -> Result<Bloc
 
     for (idx, tx) in block.transactions.txns().enumerate() {
         let hash = tx.tx_hash();
-        let receipt = receipts.iter().find(|r| r.transaction_hash() == hash);
+        let receipt = receipts_by_hash.get(&hash).copied();
         let status = receipt.map(|r| u8::from(r.status())).unwrap_or(0);
         let to_addr = tx.to();
         let created =

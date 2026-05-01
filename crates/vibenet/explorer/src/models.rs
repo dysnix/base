@@ -16,23 +16,24 @@ use crate::{
 
 /// Common footer/context fields present on every rendered page.
 #[derive(Debug, Clone)]
-pub(crate) struct PageCtx {
-    pub branch: String,
-    pub commit: String,
-    pub public_rpc_url: Option<String>,
-    pub public_faucet_url: Option<String>,
+pub struct PageCtx {
+    pub(crate) branch: String,
+    pub(crate) commit: String,
+    pub(crate) public_rpc_url: Option<String>,
+    pub(crate) public_faucet_url: Option<String>,
 }
 
 /// A block for listing rows.
-pub(crate) struct BlockListItem {
-    pub number: u64,
-    pub hash: AddrLabel,
-    pub timestamp: u64,
-    pub age: String,
-    pub miner: AddrLabel,
-    pub tx_count: u64,
-    pub gas_used: u64,
-    pub gas_limit: u64,
+#[derive(Debug)]
+pub struct BlockListItem {
+    pub(crate) number: u64,
+    pub(crate) hash: AddrLabel,
+    pub(crate) timestamp: u64,
+    pub(crate) age: String,
+    pub(crate) miner: AddrLabel,
+    pub(crate) tx_count: u64,
+    pub(crate) gas_used: u64,
+    pub(crate) gas_limit: u64,
 }
 
 impl From<BlockRow> for BlockListItem {
@@ -51,9 +52,10 @@ impl From<BlockRow> for BlockListItem {
 }
 
 /// Short + full hex pair, easier to iterate in templates than a tuple.
-pub(crate) struct AddrLabel {
-    pub full: String,
-    pub short: String,
+#[derive(Debug)]
+pub struct AddrLabel {
+    pub(crate) full: String,
+    pub(crate) short: String,
 }
 
 impl AddrLabel {
@@ -66,14 +68,15 @@ impl AddrLabel {
 }
 
 /// A transaction for listing rows.
-pub(crate) struct TxListItem {
-    pub hash: AddrLabel,
-    pub block_num: u64,
-    pub from: AddrLabel,
-    pub to: Option<AddrLabel>,
-    pub created: Option<AddrLabel>,
-    pub value_eth: String,
-    pub status: u8,
+#[derive(Debug)]
+pub struct TxListItem {
+    pub(crate) hash: AddrLabel,
+    pub(crate) block_num: u64,
+    pub(crate) from: AddrLabel,
+    pub(crate) to: Option<AddrLabel>,
+    pub(crate) created: Option<AddrLabel>,
+    pub(crate) value_eth: String,
+    pub(crate) status: u8,
 }
 
 impl From<TxRow> for TxListItem {
@@ -91,12 +94,13 @@ impl From<TxRow> for TxListItem {
 }
 
 /// One activity feed item on an address page.
-pub(crate) struct ActivityItem {
-    pub block_num: u64,
-    pub tx_hash_hex: String,
-    pub tx_hash_short: String,
-    pub role: &'static str,
-    pub role_detail: String,
+#[derive(Debug)]
+pub struct ActivityItem {
+    pub(crate) block_num: u64,
+    pub(crate) tx_hash_hex: String,
+    pub(crate) tx_hash_short: String,
+    pub(crate) role: &'static str,
+    pub(crate) role_detail: String,
 }
 
 impl From<ActivityRow> for ActivityItem {
@@ -125,23 +129,24 @@ impl From<ActivityRow> for ActivityItem {
 }
 
 /// Fields surfaced on a block detail page.
-pub(crate) struct BlockDetail {
-    pub number: u64,
-    pub hash: AddrLabel,
-    pub parent: AddrLabel,
-    pub timestamp: u64,
-    pub age: String,
-    pub miner: AddrLabel,
-    pub gas_used: u64,
-    pub gas_limit: u64,
-    pub base_fee_gwei: Option<String>,
-    pub txs: Vec<TxListItem>,
+#[derive(Debug)]
+pub struct BlockDetail {
+    pub(crate) number: u64,
+    pub(crate) hash: AddrLabel,
+    pub(crate) parent: AddrLabel,
+    pub(crate) timestamp: u64,
+    pub(crate) age: String,
+    pub(crate) miner: AddrLabel,
+    pub(crate) gas_used: u64,
+    pub(crate) gas_limit: u64,
+    pub(crate) base_fee_gwei: Option<String>,
+    pub(crate) txs: Vec<TxListItem>,
 }
 
 impl BlockDetail {
     pub(crate) fn from_rpc(block: &BaseBlock, receipts: Option<&[BaseReceipt]>) -> Self {
         let mut txs = Vec::with_capacity(block.transactions.len());
-        for (idx, t) in block.transactions.txns().enumerate() {
+        for t in block.transactions.txns() {
             let hash = t.tx_hash();
             let rcpt = receipts.and_then(|rs| rs.iter().find(|r| r.transaction_hash() == hash));
             let status = rcpt.map(|r| u8::from(r.status())).unwrap_or(0);
@@ -158,7 +163,6 @@ impl BlockDetail {
                 value_eth: format_eth(t.value()),
                 status,
             });
-            let _ = idx;
         }
 
         Self {
@@ -181,50 +185,51 @@ impl BlockDetail {
 /// (timestamp, base fee) without the template having to know about
 /// the full block type.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct TxBlockMeta {
-    pub timestamp: u64,
-    pub base_fee_per_gas: Option<u64>,
+pub struct TxBlockMeta {
+    pub(crate) timestamp: u64,
+    pub(crate) base_fee_per_gas: Option<u64>,
 }
 
 /// Fields surfaced on a tx detail page.
-pub(crate) struct TxDetail {
-    pub hash: AddrLabel,
-    pub block_num: u64,
+#[derive(Debug)]
+pub struct TxDetail {
+    pub(crate) hash: AddrLabel,
+    pub(crate) block_num: u64,
     /// Unix seconds (from the containing block), or `None` if the tx is
     /// still pending or we couldn't fetch the block.
-    pub timestamp: Option<u64>,
+    pub(crate) timestamp: Option<u64>,
     /// Pretty relative age (e.g. `"3m ago"`) when `timestamp` is known.
-    pub age: Option<String>,
-    pub from: AddrLabel,
-    pub to: Option<AddrLabel>,
-    pub created: Option<AddrLabel>,
-    pub value_eth: String,
-    pub nonce: u64,
-    pub gas_limit: u64,
-    pub gas_used: Option<u64>,
-    pub gas_price_gwei: Option<String>,
-    pub status_label: &'static str,
-    pub input_hex: String,
-    pub input_short: String,
-    pub input_bytes: usize,
+    pub(crate) age: Option<String>,
+    pub(crate) from: AddrLabel,
+    pub(crate) to: Option<AddrLabel>,
+    pub(crate) created: Option<AddrLabel>,
+    pub(crate) value_eth: String,
+    pub(crate) nonce: u64,
+    pub(crate) gas_limit: u64,
+    pub(crate) gas_used: Option<u64>,
+    pub(crate) gas_price_gwei: Option<String>,
+    pub(crate) status_label: &'static str,
+    pub(crate) input_hex: String,
+    pub(crate) input_short: String,
+    pub(crate) input_bytes: usize,
     /// Method selector (first 4 bytes of input) as `0x########`, or `None`
     /// for calls with less than 4 bytes of input (value transfers).
-    pub selector: Option<String>,
-    pub logs: Vec<LogDetail>,
+    pub(crate) selector: Option<String>,
+    pub(crate) logs: Vec<LogDetail>,
     /// Transaction type as a hex byte (e.g. `0x02`, `0x7e`).
-    pub tx_type_hex: String,
-    pub tx_type_label: &'static str,
+    pub(crate) tx_type_hex: String,
+    pub(crate) tx_type_label: &'static str,
     /// EIP-1559 max fee per gas in gwei.
-    pub max_fee_gwei: Option<String>,
+    pub(crate) max_fee_gwei: Option<String>,
     /// EIP-1559 max priority fee per gas in gwei.
-    pub max_priority_fee_gwei: Option<String>,
+    pub(crate) max_priority_fee_gwei: Option<String>,
     /// Block's base fee per gas in gwei (caller passes it in since the
     /// receipt doesn't carry it).
-    pub base_fee_gwei: Option<String>,
+    pub(crate) base_fee_gwei: Option<String>,
     /// `gas_used * effective_gas_price`, formatted as ETH.
-    pub fee_eth: Option<String>,
+    pub(crate) fee_eth: Option<String>,
     /// `gas_used / gas_limit`, formatted like `"42.18%"`.
-    pub gas_usage_pct: Option<String>,
+    pub(crate) gas_usage_pct: Option<String>,
 }
 
 impl TxDetail {
@@ -359,38 +364,44 @@ const fn tx_type_label(ty: u8) -> &'static str {
     }
 }
 
-pub(crate) struct LogDetail {
-    pub index: u64,
-    pub address: AddrLabel,
-    pub topics_hex: Vec<String>,
-    pub data_short: String,
-    pub erc20_transfer: Option<Erc20TransferDetail>,
+/// One log entry rendered on a transaction page.
+#[derive(Debug)]
+pub struct LogDetail {
+    pub(crate) index: u64,
+    pub(crate) address: AddrLabel,
+    pub(crate) topics_hex: Vec<String>,
+    pub(crate) data_short: String,
+    pub(crate) erc20_transfer: Option<Erc20TransferDetail>,
 }
 
-pub(crate) struct Erc20TransferDetail {
-    pub token: AddrLabel,
-    pub from: AddrLabel,
-    pub to: AddrLabel,
-    pub amount_raw: String,
+/// Decoded ERC-20 transfer details for a log row.
+#[derive(Debug)]
+pub struct Erc20TransferDetail {
+    pub(crate) token: AddrLabel,
+    pub(crate) from: AddrLabel,
+    pub(crate) to: AddrLabel,
+    pub(crate) amount_raw: String,
 }
 
 /// Fields on an address page.
-pub(crate) struct AddressDetail {
-    pub hex: String,
-    pub balance_eth: String,
-    pub nonce: u64,
-    pub is_contract: bool,
-    pub code_size: usize,
-    pub activity: Vec<ActivityItem>,
-    pub next_cursor: Option<String>,
+#[derive(Debug)]
+pub struct AddressDetail {
+    pub(crate) hex: String,
+    pub(crate) balance_eth: String,
+    pub(crate) nonce: u64,
+    pub(crate) is_contract: bool,
+    pub(crate) code_size: usize,
+    pub(crate) activity: Vec<ActivityItem>,
+    pub(crate) next_cursor: Option<String>,
 }
 
 /// Home page stats.
-pub(crate) struct StatsBlock {
-    pub blocks: u64,
-    pub txs: u64,
-    pub addresses: u64,
-    pub head: u64,
+#[derive(Debug)]
+pub struct StatsBlock {
+    pub(crate) blocks: u64,
+    pub(crate) txs: u64,
+    pub(crate) addresses: u64,
+    pub(crate) head: u64,
 }
 
 impl StatsBlock {
