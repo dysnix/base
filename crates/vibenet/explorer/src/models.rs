@@ -6,7 +6,7 @@ use std::{collections::HashMap, fmt};
 
 use alloy_consensus::Typed2718 as _;
 use alloy_network_primitives::{ReceiptResponse as _, TransactionResponse as _};
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, U256, b256};
 use alloy_rpc_types_eth::TransactionTrait as EthTransactionTrait;
 
 use crate::{
@@ -489,10 +489,9 @@ fn data_short(bytes: &[u8]) -> String {
     }
 }
 
-const ERC20_TRANSFER_TOPIC: [u8; 32] = [
-    0xdd, 0xf2, 0x52, 0xad, 0x1b, 0xe2, 0xc8, 0x9b, 0x69, 0xc2, 0xb0, 0x68, 0xfc, 0x37, 0x8d, 0xaa,
-    0x95, 0x2b, 0xa7, 0xf1, 0x63, 0xc4, 0xa1, 0x16, 0x28, 0xf5, 0x5a, 0x4d, 0xf5, 0x23, 0xb3, 0xef,
-];
+/// `keccak256("Transfer(address,address,uint256)")`.
+pub(crate) const ERC20_TRANSFER_TOPIC: B256 =
+    b256!("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
 
 fn decode_erc20_transfer(
     token: Address,
@@ -502,8 +501,7 @@ fn decode_erc20_transfer(
     // ERC-20 Transfer(address indexed from, address indexed to, uint256 value).
     // ERC-721 uses the same event signature but indexes tokenId too, yielding
     // four topics, so the topics.len() == 3 check keeps NFT transfers separate.
-    let event_topic: &[u8] = topics.first()?.as_ref();
-    if topics.len() != 3 || event_topic != ERC20_TRANSFER_TOPIC || data.len() != 32 {
+    if topics.len() != 3 || *topics.first()? != ERC20_TRANSFER_TOPIC || data.len() != 32 {
         return None;
     }
 

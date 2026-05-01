@@ -16,7 +16,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use alloy_network_primitives::{ReceiptResponse as _, TransactionResponse as _};
-use alloy_primitives::{Address, B256, U256, b256};
+use alloy_primitives::{Address, B256, U256};
 use alloy_provider::{Provider, ProviderBuilder, RootProvider};
 use alloy_rpc_types_eth::{BlockId, TransactionTrait as _};
 use base_common_network::Base;
@@ -25,15 +25,10 @@ use futures::StreamExt;
 use tracing::{debug, info, warn};
 
 use crate::{
+    models::ERC20_TRANSFER_TOPIC,
     rpc_proxy::{BaseBlock, BaseReceipt, RpcClient},
     storage::{ActivityRole, ActivityWrite, BlockRow, BlockWrite, Storage, TxRow},
 };
-
-/// `keccak256("Transfer(address,address,uint256)")`. Covers ERC-20 and
-/// ERC-721 (ERC-721 marks from/to/id as indexed so `topics.len()` == 4; we
-/// treat both identically for activity indexing).
-const TRANSFER_TOPIC: B256 =
-    b256!("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
 
 /// Background worker that indexes blocks into the address activity database.
 #[derive(Debug)]
@@ -349,7 +344,7 @@ fn build_block_write(block: &BaseBlock, receipts: &[BaseReceipt]) -> Result<Bloc
                 let topics = log.topics();
                 // Must have topic0 + from + to (3 topics min). ERC-721 has
                 // id as a third indexed arg, which we ignore.
-                if topics.len() < 3 || topics[0] != TRANSFER_TOPIC {
+                if topics.len() < 3 || topics[0] != ERC20_TRANSFER_TOPIC {
                     continue;
                 }
                 let token = log.address();

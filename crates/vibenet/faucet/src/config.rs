@@ -1,6 +1,11 @@
 //! Environment-driven configuration for the vibenet faucet.
 
-use std::{net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    str::FromStr,
+    time::Duration,
+};
 
 use alloy_primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
@@ -26,6 +31,8 @@ pub struct FaucetConfig {
     pub ip_cooldown: Duration,
     /// Per-destination-address cooldown.
     pub addr_cooldown: Duration,
+    /// Proxy peers whose client IP headers are trusted.
+    pub trusted_proxies: Vec<TrustedProxy>,
     /// Path to the contracts.json file written by vibenet-setup. Used only
     /// for USDV drips; if the file does not exist or lacks a `usdv` entry,
     /// the USDV drip endpoint returns a helpful error and the ETH drip
@@ -34,6 +41,30 @@ pub struct FaucetConfig {
     /// Number of USDV *base units* (6 decimals) minted per USDV drip. The
     /// default is 1000 * 10^6 = 1000 USDV.
     pub usdv_drip_units: U256,
+}
+
+/// Trusted proxy selector for client IP headers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrustedProxy {
+    /// Trust loopback peers.
+    Loopback,
+    /// Trust `RFC1918` `IPv4` and unique-local `IPv6` peers.
+    Private,
+    /// Trust one exact proxy IP.
+    Ip(IpAddr),
+}
+
+impl TrustedProxy {
+    /// Return true when this selector trusts `peer`.
+    pub fn matches(&self, peer: IpAddr) -> bool {
+        match (self, peer) {
+            (Self::Loopback, IpAddr::V4(ip)) => ip.is_loopback(),
+            (Self::Loopback, IpAddr::V6(ip)) => ip.is_loopback(),
+            (Self::Private, IpAddr::V4(ip)) => ip.is_private(),
+            (Self::Private, IpAddr::V6(ip)) => ip.is_unique_local(),
+            (Self::Ip(trusted), peer) => *trusted == peer,
+        }
+    }
 }
 
 impl FaucetConfig {
@@ -79,6 +110,10 @@ impl FaucetConfig {
             Duration::from_secs(parse_u64_env("VIBENET_FAUCET_IP_COOLDOWN_SECS", 3600)?);
         let addr_cooldown =
             Duration::from_secs(parse_u64_env("VIBENET_FAUCET_ADDR_COOLDOWN_SECS", 3600)?);
+        let trusted_proxies = match std::env::var("VIBENET_FAUCET_TRUSTED_PROXIES") {
+            Ok(raw) => parse_trusted_proxies(&raw)?,
+            Err(_) => Vec::new(),
+        };
 
         let contracts_path = std::env::var("VIBENET_FAUCET_CONTRACTS_PATH")
             .unwrap_or_else(|_| "/shared/contracts.json".to_string())
@@ -95,6 +130,7 @@ impl FaucetConfig {
             drip_wei,
             ip_cooldown,
             addr_cooldown,
+            trusted_proxies,
             contracts_path,
             usdv_drip_units,
         })
@@ -111,4 +147,19 @@ fn parse_u64_env(name: &str, default: u64) -> Result<u64> {
         |_| Ok(default),
         |s| s.parse().map_err(|e| eyre!("{name} must be unsigned int: {e}")),
     )
+}
+
+fn parse_trusted_proxies(raw: &str) -> Result<Vec<TrustedProxy>> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| match part {
+            "loopback" => Ok(TrustedProxy::Loopback),
+            "private" => Ok(TrustedProxy::Private),
+            _ => part
+                .parse::<IpAddr>()
+                .map(TrustedProxy::Ip)
+                .map_err(|e| eyre!("VIBENET_FAUCET_TRUSTED_PROXIES has invalid entry {part}: {e}")),
+        })
+        .collect()
 }

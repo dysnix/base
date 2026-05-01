@@ -62,3 +62,21 @@ CREATE TABLE IF NOT EXISTS address_activity (
 );
 CREATE INDEX IF NOT EXISTS idx_activity_addr_block
     ON address_activity (address, block_num DESC, tx_index DESC, log_index DESC);
+
+-- Cached aggregate counts for the explorer home page. Keeping this updated
+-- during indexing avoids repeated COUNT(*) / COUNT(DISTINCT) scans over the
+-- hot listing tables.
+CREATE TABLE IF NOT EXISTS addresses (
+    address BLOB PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS explorer_stats (
+    id        INTEGER PRIMARY KEY CHECK (id = 0),
+    blocks    INTEGER NOT NULL,
+    txs       INTEGER NOT NULL,
+    addresses INTEGER NOT NULL
+);
+
+INSERT INTO explorer_stats (id, blocks, txs, addresses)
+VALUES (0, 0, 0, 0)
+ON CONFLICT(id) DO NOTHING;

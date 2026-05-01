@@ -150,9 +150,16 @@ impl Storage {
     pub(crate) async fn wipe(&self) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM address_activity").execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM addresses").execute(&mut *tx).await?;
         sqlx::query("DELETE FROM txs").execute(&mut *tx).await?;
         sqlx::query("DELETE FROM blocks").execute(&mut *tx).await?;
         sqlx::query("DELETE FROM cursor").execute(&mut *tx).await?;
+        sqlx::query(
+            "INSERT INTO explorer_stats (id, blocks, txs, addresses) VALUES (0, 0, 0, 0) \
+             ON CONFLICT(id) DO UPDATE SET blocks = 0, txs = 0, addresses = 0",
+        )
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -163,6 +170,14 @@ impl Storage {
             return Ok(());
         };
         let mut tx = self.pool.begin().await?;
+        let existing_block: Option<(i64,)> =
+            sqlx::query_as("SELECT tx_count FROM blocks WHERE number = ?")
+                .bind(block.number as i64)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let block_delta = i64::from(existing_block.is_none());
+        let tx_delta =
+            block.tx_count as i64 - existing_block.map(|(tx_count,)| tx_count).unwrap_or(0);
 
         let base_fee = block.base_fee.map(|v| v.to_be_bytes::<32>().to_vec());
         sqlx::query(
@@ -199,7 +214,14 @@ impl Storage {
             .await?;
         }
 
+        let mut address_delta = 0_i64;
         for a in write.activity {
+            address_delta += sqlx::query("INSERT OR IGNORE INTO addresses (address) VALUES (?)")
+                .bind(a.address.as_slice())
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as i64;
+
             sqlx::query(
                 "INSERT OR IGNORE INTO address_activity \
                  (address, block_num, tx_index, log_index, tx_hash, role, token) \
@@ -215,6 +237,17 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         }
+
+        sqlx::query(
+            "UPDATE explorer_stats \
+             SET blocks = blocks + ?, txs = txs + ?, addresses = addresses + ? \
+             WHERE id = 0",
+        )
+        .bind(block_delta)
+        .bind(tx_delta)
+        .bind(address_delta)
+        .execute(&mut *tx)
+        .await?;
 
         sqlx::query(
             "INSERT INTO cursor (id, last_indexed_block, last_indexed_hash, updated_at) \
@@ -311,14 +344,11 @@ impl Storage {
 
     /// Simple health/stats for the home page.
     pub(crate) async fn stats(&self) -> Result<Stats> {
-        let blocks: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM blocks").fetch_one(&self.pool).await?;
-        let txs: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM txs").fetch_one(&self.pool).await?;
-        let addresses: (i64,) =
-            sqlx::query_as("SELECT COUNT(DISTINCT address) FROM address_activity")
+        let row: (i64, i64, i64) =
+            sqlx::query_as("SELECT blocks, txs, addresses FROM explorer_stats WHERE id = 0")
                 .fetch_one(&self.pool)
                 .await?;
-        Ok(Stats { blocks: blocks.0 as u64, txs: txs.0 as u64, addresses: addresses.0 as u64 })
+        Ok(Stats { blocks: row.0 as u64, txs: row.1 as u64, addresses: row.2 as u64 })
     }
 }
 

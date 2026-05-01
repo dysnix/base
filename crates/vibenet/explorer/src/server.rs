@@ -183,11 +183,26 @@ struct TraceTmpl {
 async fn home(State(state): State<Arc<AppState>>) -> Response {
     let stats = match state.storage.stats().await {
         Ok(s) => s,
-        Err(err) => return render_error(&state.ctx, 500, err.to_string()),
+        Err(err) => return render_error(&state.ctx, 500, format!("failed to load stats: {err}")),
     };
-    let head = state.rpc.block_number().await.unwrap_or(0);
-    let blocks = state.storage.latest_blocks(15).await.unwrap_or_default();
-    let txs = state.storage.latest_txs(15).await.unwrap_or_default();
+    let head = match state.rpc.block_number().await {
+        Ok(head) => head,
+        Err(err) => {
+            return render_error(&state.ctx, 502, format!("failed to load chain head: {err}"));
+        }
+    };
+    let blocks = match state.storage.latest_blocks(15).await {
+        Ok(blocks) => blocks,
+        Err(err) => {
+            return render_error(&state.ctx, 500, format!("failed to load latest blocks: {err}"));
+        }
+    };
+    let txs = match state.storage.latest_txs(15).await {
+        Ok(txs) => txs,
+        Err(err) => {
+            return render_error(&state.ctx, 500, format!("failed to load latest txs: {err}"));
+        }
+    };
 
     render_html(HomeTmpl {
         ctx: state.ctx.clone(),
@@ -373,11 +388,25 @@ async fn address_detail(
         state.rpc.code(address),
     );
 
-    let balance = balance.unwrap_or_default();
-    let nonce = nonce.unwrap_or(0);
-    let code = code.unwrap_or_default();
+    let balance = match balance {
+        Ok(balance) => balance,
+        Err(err) => return render_error(&state.ctx, 502, format!("failed to load balance: {err}")),
+    };
+    let nonce = match nonce {
+        Ok(nonce) => nonce,
+        Err(err) => return render_error(&state.ctx, 502, format!("failed to load nonce: {err}")),
+    };
+    let code = match code {
+        Ok(code) => code,
+        Err(err) => return render_error(&state.ctx, 502, format!("failed to load code: {err}")),
+    };
 
-    let activity = state.storage.activity_for(address, before, 50).await.unwrap_or_default();
+    let activity = match state.storage.activity_for(address, before, 50).await {
+        Ok(activity) => activity,
+        Err(err) => {
+            return render_error(&state.ctx, 500, format!("failed to load activity: {err}"));
+        }
+    };
 
     let next_cursor =
         activity.last().map(|a| format!("{}-{}-{}", a.block_num, a.tx_index, a.log_index));

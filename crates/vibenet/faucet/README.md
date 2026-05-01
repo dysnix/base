@@ -27,3 +27,4 @@ Exposes:
 | `VIBENET_FAUCET_USDV_DRIP_UNITS` | no | `1000000000` | USDV minted per drip (1000 USDV, 6 decimals). |
 | `VIBENET_FAUCET_IP_COOLDOWN_SECS` | no | `3600` | Per-IP cooldown, applied independently per asset. |
 | `VIBENET_FAUCET_ADDR_COOLDOWN_SECS` | no | `3600` | Per-destination cooldown, applied independently per asset. |
+| `VIBENET_FAUCET_TRUSTED_PROXIES` | no | empty | Comma-separated trusted proxy peers for `X-Real-IP` / `CF-Connecting-IP`; supports `loopback`, `private`, or exact IPs. Empty means use the TCP peer IP directly. |

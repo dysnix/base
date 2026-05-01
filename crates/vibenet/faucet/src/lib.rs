@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 mod config;
-pub use config::FaucetConfig;
+pub use config::{FaucetConfig, TrustedProxy};
 
 mod state;
 pub use state::{Asset, FaucetProvider, FaucetState};

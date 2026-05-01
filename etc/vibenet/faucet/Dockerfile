@@ -4,11 +4,12 @@
 #   docker build -f etc/vibenet/faucet/Dockerfile -t base-vibenet-faucet:local .
 #
 # Mirrors the mold + cargo cache pattern used by etc/docker/Dockerfile.rust-services
-# so incremental rebuilds share target caches with the other in-tree rust images.
+# so rebuilds share target caches with the other in-tree rust images.
 
 ARG RUST_VERSION=1.93
 FROM public.ecr.aws/docker/library/rust:${RUST_VERSION}-trixie AS builder-base
 WORKDIR /app
+ENV CARGO_INCREMENTAL=0
 
 ARG MOLD_VERSION=2.40.4
 ARG MOLD_SHA256_AARCH64=c799b9ccae8728793da2186718fbe53b76400a9da396184fac0c64aa3298ec37

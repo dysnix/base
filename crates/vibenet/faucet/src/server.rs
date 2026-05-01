@@ -23,6 +23,7 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::{
+    config::TrustedProxy,
     contracts,
     state::{Asset, FaucetState},
 };
@@ -140,7 +141,7 @@ async fn drip(
     let to = Address::from_str(req.address.trim())
         .map_err(|_| ApiError::bad_request("invalid destination address"))?;
 
-    let client_ip = client_ip(&headers, peer.ip());
+    let client_ip = client_ip(&headers, peer.ip(), &state.config.trusted_proxies);
     let ip_key = (Asset::Eth, client_ip);
     let addr_key = (Asset::Eth, to);
 
@@ -207,7 +208,7 @@ async fn drip_usdv(
             )
         })?;
 
-    let client_ip = client_ip(&headers, peer.ip());
+    let client_ip = client_ip(&headers, peer.ip(), &state.config.trusted_proxies);
     let ip_key = (Asset::Usdv, client_ip);
     let addr_key = (Asset::Usdv, to);
 
@@ -249,11 +250,13 @@ fn cooldown_error(scope: &str, remaining: std::time::Duration) -> ApiError {
     ))
 }
 
-/// Extract the real client IP. Prefers `X-Real-IP` (set by the nginx gateway
-/// after its real_ip_header/X-Forwarded-For processing), falls back to the
-/// legacy `CF-Connecting-IP` for old deployments, and finally to the direct
-/// TCP peer (which is the nginx container in any real deployment).
-fn client_ip(headers: &HeaderMap, peer: IpAddr) -> IpAddr {
+/// Extract the real client IP. Proxy headers are trusted only when the TCP peer
+/// matches `VIBENET_FAUCET_TRUSTED_PROXIES`; direct requests use the peer IP.
+fn client_ip(headers: &HeaderMap, peer: IpAddr, trusted_proxies: &[TrustedProxy]) -> IpAddr {
+    if !trusted_proxies.iter().any(|trusted| trusted.matches(peer)) {
+        return peer;
+    }
+
     for header in [X_REAL_IP, CF_CONNECTING_IP] {
         if let Some(value) = headers.get(header)
             && let Ok(s) = value.to_str()
@@ -292,5 +295,38 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         (self.status, Json(serde_json::json!({ "error": self.message }))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use axum::http::{HeaderMap, HeaderValue};
+
+    use super::{X_REAL_IP, client_ip};
+    use crate::config::TrustedProxy;
+
+    #[test]
+    fn client_ip_trusts_proxy_headers_from_private_peers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(X_REAL_IP, HeaderValue::from_static("203.0.113.10"));
+
+        let peer = IpAddr::V4(Ipv4Addr::new(172, 18, 0, 4));
+
+        assert_eq!(
+            client_ip(&headers, peer, &[TrustedProxy::Private]),
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10))
+        );
+    }
+
+    #[test]
+    fn client_ip_ignores_proxy_headers_without_trusted_proxy_config() {
+        let mut headers = HeaderMap::new();
+        headers.insert(X_REAL_IP, HeaderValue::from_static("203.0.113.10"));
+
+        let peer = IpAddr::V4(Ipv4Addr::new(172, 18, 0, 4));
+
+        assert_eq!(client_ip(&headers, peer, &[]), peer);
     }
 }
