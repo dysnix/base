@@ -27,6 +27,12 @@ base_metrics::define_metrics! {
     #[describe("Total number of processing errors encountered")]
     processing_errors_total: counter,
 
+    #[describe("Total number of TDX collateral fetch failures")]
+    tdx_collateral_fetch_failures_total: counter,
+
+    #[describe("Earliest expiration time among accepted TDX collateral")]
+    tdx_collateral_earliest_expiration: gauge,
+
     #[describe("Total number of CRL checks performed")]
     crl_checks_total: counter,
 

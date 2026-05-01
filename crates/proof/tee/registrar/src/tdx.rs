@@ -1,9 +1,10 @@
 //! TDX attestation hydration for registrar proof generation.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     error::Error,
     fmt,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -11,14 +12,16 @@ use alloy_primitives::{Address, B256, Bytes, hex};
 use base_proof_tee_tdx_attestation_prover::TdxAttestationProverInput;
 use base_proof_tee_tdx_prover::TdxSignerAttestation;
 use base_proof_tee_tdx_verifier::{
-    AuthenticatedTdxCertificate, TdxCertificate, TdxCertificateRevocationList, TdxCollateral,
-    TdxPckTcb, TdxPlatformIdentity, TdxQuote, TdxQuotePolicy, TdxRevocationEvidence,
-    TdxSignedCollateral, TdxSignedCollateralBody, TdxVerifierError, TdxVerifierInput,
+    AuthenticatedTdxCertificate, CollateralVerifier, ParsedTdxQuote, TdxCertificate,
+    TdxCertificateRevocationList, TdxCollateral, TdxPckTcb, TdxPlatformIdentity, TdxQuote,
+    TdxQuotePolicy, TdxRevocationEvidence, TdxSignedCollateral, TdxSignedCollateralBody,
+    TdxVerifierError, TdxVerifierInput,
 };
 use reqwest::{
     StatusCode,
     header::{HeaderMap, HeaderName},
 };
+use tracing::debug;
 use x509_parser::{
     certificate::X509Certificate,
     extensions::{DistributionPointName, GeneralName, ParsedExtension},
@@ -26,7 +29,9 @@ use x509_parser::{
     prelude::FromDer,
 };
 
-use crate::{RegistrarError, Result, TdxAttestationConfig, crl::build_crl_http_client};
+use crate::{
+    RegistrarError, RegistrarMetrics, Result, TdxAttestationConfig, crl::build_crl_http_client,
+};
 
 /// Maximum allowed Intel PCS response size.
 pub const MAX_TDX_COLLATERAL_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
@@ -39,7 +44,7 @@ const QE_IDENTITY_SIGNATURE_FIELD: &str = "signature";
 const ALLOWED_INTEL_HOST_SUFFIX: &str = ".trustedservices.intel.com";
 
 /// TDX collateral fetched from Intel PCS for one signer quote.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TdxCollateralFetch {
     /// Root-to-leaf PCK certificate chain carried by the quote.
     pub pck_certificate_chain: Vec<TdxCertificate>,
@@ -51,12 +56,135 @@ pub struct TdxCollateralFetch {
     pub trusted_root_ca_hash: B256,
 }
 
+/// Cache lookup fields available before collateral is fetched.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TdxCollateralCacheLookup {
+    /// Hash of the trusted issuer root certificate for this collateral family.
+    pub issuer: B256,
+    /// Hash of the PCK leaf issuer certificate whose CRL is required.
+    pub pck_issuer: B256,
+    /// Intel FMSPC bytes for the platform.
+    pub fmspc: Vec<u8>,
+    /// PCK CA/PCE selector bytes used for the collateral request.
+    pub ca: Vec<u8>,
+    /// PCS collateral API version, such as `v4`.
+    pub collateral_version: String,
+}
+
+/// Full cache key for a fetched collateral bundle.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TdxCollateralCacheKey {
+    /// Lookup fields shared by fresh and expired entries.
+    pub lookup: TdxCollateralCacheLookup,
+    /// Earliest accepted expiration across collateral, certificates, and CRLs.
+    pub expiration: u64,
+}
+
+/// Cache entry for one TDX collateral bundle.
+#[derive(Debug, Clone)]
+pub struct TdxCollateralCacheEntry {
+    /// Full key, including collateral expiration.
+    pub key: TdxCollateralCacheKey,
+    /// Cached collateral bundle.
+    pub fetch: TdxCollateralFetch,
+}
+
+/// In-memory cache for Intel PCS collateral bundles.
+#[derive(Debug, Default)]
+pub struct TdxCollateralCache {
+    entries: HashMap<TdxCollateralCacheKey, TdxCollateralFetch>,
+    current: HashMap<TdxCollateralCacheLookup, TdxCollateralCacheKey>,
+}
+
+impl TdxCollateralCache {
+    /// Returns a fresh cache entry for the lookup key, if present.
+    pub fn get(
+        &self,
+        lookup: &TdxCollateralCacheLookup,
+        now_seconds: u64,
+    ) -> Option<TdxCollateralCacheEntry> {
+        let key = self.current.get(lookup)?;
+        if key.expiration <= now_seconds {
+            return None;
+        }
+        self.entries
+            .get(key)
+            .cloned()
+            .map(|fetch| TdxCollateralCacheEntry { key: key.clone(), fetch })
+    }
+
+    /// Inserts a collateral bundle and returns the full cache key.
+    pub fn insert(
+        &mut self,
+        lookup: TdxCollateralCacheLookup,
+        expiration: u64,
+        fetch: TdxCollateralFetch,
+    ) -> TdxCollateralCacheKey {
+        let key = TdxCollateralCacheKey { lookup: lookup.clone(), expiration };
+        if let Some(old_key) = self.current.insert(lookup, key.clone()) {
+            self.entries.remove(&old_key);
+        }
+        self.entries.insert(key.clone(), fetch);
+        key
+    }
+
+    /// Removes the current entry for `lookup`, if one exists.
+    pub fn remove(&mut self, lookup: &TdxCollateralCacheLookup) {
+        if let Some(key) = self.current.remove(lookup) {
+            self.entries.remove(&key);
+        }
+    }
+
+    /// Returns the earliest expiration among currently fresh cache entries.
+    pub fn earliest_expiration(&self, now_seconds: u64) -> Option<u64> {
+        self.current
+            .values()
+            .filter(|key| key.expiration > now_seconds && self.entries.contains_key(*key))
+            .map(|key| key.expiration)
+            .min()
+    }
+
+    /// Returns the number of cached collateral bundles.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns true when the cache has no collateral bundles.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Host-side TDX collateral provider with Intel PCS retrieval and caching.
+#[derive(Debug, Clone)]
+pub struct TdxCollateralProvider {
+    hydrator: TdxAttestationHydrator,
+}
+
+impl TdxCollateralProvider {
+    /// Creates a provider with a hardened HTTP client.
+    pub fn new(config: TdxAttestationConfig) -> Result<Self> {
+        Ok(Self { hydrator: TdxAttestationHydrator::new(config)? })
+    }
+
+    /// Fetches and caches collateral for a TDX quote.
+    pub async fn fetch_collateral(&self, quote: &[u8]) -> Result<TdxCollateralFetch> {
+        self.hydrator.fetch_collateral(quote).await
+    }
+
+    /// Returns the shared in-memory collateral cache.
+    pub fn cache(&self) -> Arc<Mutex<TdxCollateralCache>> {
+        Arc::clone(&self.hydrator.cache)
+    }
+}
+
 /// Hydrates TDX signer RPC attestations into prover input bytes.
 #[derive(Debug, Clone)]
 pub struct TdxAttestationHydrator {
     /// Intel PCS and verifier policy configuration.
     pub config: TdxAttestationConfig,
     client: reqwest::Client,
+    cache: Arc<Mutex<TdxCollateralCache>>,
 }
 
 impl TdxAttestationHydrator {
@@ -64,7 +192,7 @@ impl TdxAttestationHydrator {
     pub fn new(config: TdxAttestationConfig) -> Result<Self> {
         let client = build_crl_http_client(config.fetch_timeout)
             .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
-        Ok(Self { config, client })
+        Ok(Self { config, client, cache: Arc::new(Mutex::new(TdxCollateralCache::default())) })
     }
 
     /// Returns true if `attestation_bytes` are already encoded TDX prover input.
@@ -132,6 +260,17 @@ impl TdxAttestationHydrator {
 
     /// Fetches Intel PCS collateral and CRLs required to verify `quote`.
     pub async fn fetch_collateral(&self, quote: &[u8]) -> Result<TdxCollateralFetch> {
+        match self.fetch_collateral_inner(quote).await {
+            Ok(fetch) => Ok(fetch),
+            Err(error) => {
+                RegistrarMetrics::tdx_collateral_fetch_failures_total().increment(1);
+                Err(error)
+            }
+        }
+    }
+
+    /// Fetches Intel PCS collateral and CRLs required to verify `quote`.
+    pub async fn fetch_collateral_inner(&self, quote: &[u8]) -> Result<TdxCollateralFetch> {
         let parsed_quote =
             TdxQuote::parse(quote).map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
         let pck_certificate_chain = Self::pck_certificate_chain_from_quote(&parsed_quote)?;
@@ -146,6 +285,23 @@ impl TdxAttestationHydrator {
             .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
         let pck_tcb = TdxPckTcb::from_pck_certificate_der(&pck_leaf.raw)
             .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+
+        let verification_time = Self::now_seconds()?;
+        let lookup = Self::collateral_cache_lookup(
+            &pck_certificate_chain,
+            &platform,
+            &self.config.pcs_tdx_base_url,
+        )?;
+        if let Some(fetch) = self.cached_collateral(
+            &lookup,
+            &parsed_quote,
+            &pck_certificate_chain,
+            &pck_tcb,
+            verification_time,
+        )? {
+            return Ok(fetch);
+        }
+
         let tcb_info = self.fetch_tcb_info(&platform).await?;
         let qe_identity = self.fetch_qe_identity().await?;
         let tcb_status = tcb_info
@@ -159,12 +315,112 @@ impl TdxAttestationHydrator {
                 collateral.qe_identity.signing_chain.as_slice(),
             ])
             .await?;
-        Ok(TdxCollateralFetch {
+        let fetch = TdxCollateralFetch {
             pck_certificate_chain,
             collateral,
             revocation,
             trusted_root_ca_hash: self.config.trusted_root_ca_hash,
-        })
+        };
+        let expiration =
+            Self::verify_collateral_for_quote(&fetch, &parsed_quote, verification_time)?;
+        {
+            self.cache_lock()?.insert(lookup, expiration, fetch.clone());
+        }
+        self.record_collateral_cache_earliest_expiration(verification_time)?;
+        Ok(fetch)
+    }
+
+    fn cache_poisoned_error(error: String) -> RegistrarError {
+        RegistrarError::TdxAttestation(Box::new(TdxHydrationError::CachePoisoned { error }))
+    }
+
+    fn cache_lock(&self) -> Result<std::sync::MutexGuard<'_, TdxCollateralCache>> {
+        self.cache.lock().map_err(|e| Self::cache_poisoned_error(e.to_string()))
+    }
+
+    fn record_collateral_cache_earliest_expiration(&self, verification_time: u64) -> Result<()> {
+        let expiration = self.cache_lock()?.earliest_expiration(verification_time).unwrap_or(0);
+        RegistrarMetrics::tdx_collateral_earliest_expiration().set(expiration as f64);
+        Ok(())
+    }
+
+    /// Verifies host-side collateral and returns the earliest accepted expiration.
+    pub fn verify_collateral_for_quote(
+        fetch: &TdxCollateralFetch,
+        parsed_quote: &ParsedTdxQuote,
+        verification_time: u64,
+    ) -> Result<u64> {
+        let pck_leaf_key = CollateralVerifier::verify_certificate_chain(
+            &fetch.pck_certificate_chain,
+            fetch.trusted_root_ca_hash,
+            verification_time,
+            &fetch.revocation,
+        )
+        .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        TdxQuote::verify_qe_report(parsed_quote, &pck_leaf_key)
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        TdxQuote::verify_signature(parsed_quote)
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+
+        CollateralVerifier::verify_signed_collateral(
+            &fetch.collateral.tcb_info,
+            TdxSignedCollateralBody::TcbInfo,
+            fetch.trusted_root_ca_hash,
+            verification_time,
+            &fetch.revocation,
+            TdxVerifierError::TcbInfoInvalid,
+        )
+        .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        CollateralVerifier::verify_signed_collateral(
+            &fetch.collateral.qe_identity,
+            TdxSignedCollateralBody::QeIdentity,
+            fetch.trusted_root_ca_hash,
+            verification_time,
+            &fetch.revocation,
+            TdxVerifierError::QeIdentityInvalid,
+        )
+        .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+
+        let pck_leaf = fetch.pck_certificate_chain.last().ok_or_else(|| {
+            RegistrarError::TdxAttestation(Box::new(TdxVerifierError::PckCertChainInvalid(
+                "certificate chain is empty".into(),
+            )))
+        })?;
+        let pck_platform = TdxPlatformIdentity::from_pck_certificate_der(&pck_leaf.raw)
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        let pck_tcb = TdxPckTcb::from_pck_certificate_der(&pck_leaf.raw)
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        let tcb_info_document = fetch
+            .collateral
+            .tcb_info
+            .tcb_info_document()
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        tcb_info_document
+            .tcb_info
+            .verify_platform(&pck_platform)
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        let qe_identity_document = fetch
+            .collateral
+            .qe_identity
+            .qe_identity_document()
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        qe_identity_document
+            .enclave_identity
+            .verify_qe_report(parsed_quote)
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        let tcb_status = tcb_info_document
+            .tcb_info
+            .tcb_status_for_quote(parsed_quote, &pck_tcb)
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        if tcb_status != fetch.collateral.tcb_status {
+            return Err(RegistrarError::TdxAttestation(Box::new(
+                TdxVerifierError::TcbInfoInvalid(
+                    "collateral TCB status does not match quote".into(),
+                ),
+            )));
+        }
+
+        Self::validate_collateral_freshness(fetch, verification_time)
     }
 
     fn now_seconds() -> Result<u64> {
@@ -174,8 +430,169 @@ impl TdxAttestationHydrator {
             .map(|duration| duration.as_secs())
     }
 
+    /// Builds the cache lookup key for a quote's platform collateral.
+    pub fn collateral_cache_lookup(
+        pck_certificate_chain: &[TdxCertificate],
+        platform: &TdxPlatformIdentity,
+        pcs_tdx_base_url: &url::Url,
+    ) -> Result<TdxCollateralCacheLookup> {
+        let issuer = pck_certificate_chain
+            .first()
+            .ok_or_else(|| RegistrarError::TdxAttestation("certificate chain is empty".into()))?
+            .hash();
+        let pck_issuer = pck_certificate_chain
+            .iter()
+            .rev()
+            .nth(1)
+            .unwrap_or_else(|| {
+                pck_certificate_chain
+                    .first()
+                    .expect("certificate chain is non-empty after issuer lookup")
+            })
+            .hash();
+        Ok(TdxCollateralCacheLookup {
+            issuer,
+            pck_issuer,
+            fmspc: platform.fmspc.to_vec(),
+            ca: platform.pce_id.to_vec(),
+            collateral_version: Self::collateral_version(pcs_tdx_base_url),
+        })
+    }
+
+    /// Extracts the PCS collateral version from a base URL.
+    pub fn collateral_version(pcs_tdx_base_url: &url::Url) -> String {
+        pcs_tdx_base_url
+            .path_segments()
+            .into_iter()
+            .flatten()
+            .rev()
+            .find(|segment| segment.starts_with('v'))
+            .unwrap_or("unknown")
+            .to_string()
+    }
+
+    /// Validates host-side collateral freshness and returns the earliest expiration.
+    pub fn validate_collateral_freshness(
+        fetch: &TdxCollateralFetch,
+        verification_time: u64,
+    ) -> Result<u64> {
+        let mut expiration = u64::MAX;
+        for certificate in fetch
+            .pck_certificate_chain
+            .iter()
+            .chain(fetch.collateral.tcb_info.signing_chain.iter())
+            .chain(fetch.collateral.qe_identity.signing_chain.iter())
+        {
+            if verification_time < certificate.not_before
+                || verification_time >= certificate.not_after
+            {
+                return Err(RegistrarError::TdxAttestation(Box::new(
+                    TdxVerifierError::CollateralExpired,
+                )));
+            }
+            expiration = expiration.min(certificate.not_after);
+        }
+
+        expiration = expiration.min(Self::validate_signed_collateral_freshness(
+            &fetch.collateral.tcb_info,
+            TdxSignedCollateralBody::TcbInfo,
+            verification_time,
+        )?);
+        expiration = expiration.min(Self::validate_signed_collateral_freshness(
+            &fetch.collateral.qe_identity,
+            TdxSignedCollateralBody::QeIdentity,
+            verification_time,
+        )?);
+
+        for chain in [
+            fetch.pck_certificate_chain.as_slice(),
+            fetch.collateral.tcb_info.signing_chain.as_slice(),
+            fetch.collateral.qe_identity.signing_chain.as_slice(),
+        ] {
+            if chain.len() <= 1 {
+                continue;
+            }
+            let crl_expiration = fetch
+                .revocation
+                .certificate_chain_next_update(chain, verification_time)
+                .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+            expiration = expiration.min(crl_expiration);
+        }
+
+        Ok(expiration)
+    }
+
+    /// Validates one signed collateral document's freshness.
+    pub fn validate_signed_collateral_freshness(
+        collateral: &TdxSignedCollateral,
+        body_kind: TdxSignedCollateralBody,
+        verification_time: u64,
+    ) -> Result<u64> {
+        let error_mapper = match body_kind {
+            TdxSignedCollateralBody::TcbInfo => TdxVerifierError::TcbInfoInvalid,
+            TdxSignedCollateralBody::QeIdentity => TdxVerifierError::QeIdentityInvalid,
+        };
+        let validity = collateral
+            .signed_validity(body_kind, error_mapper)
+            .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))?;
+        if collateral.issue_time != validity.issue_time
+            || collateral.next_update != validity.next_update
+        {
+            return Err(RegistrarError::TdxAttestation(Box::new(error_mapper(
+                "explicit collateral validity does not match signed JSON".into(),
+            ))));
+        }
+        if verification_time < validity.issue_time || verification_time >= validity.next_update {
+            return Err(RegistrarError::TdxAttestation(Box::new(
+                TdxVerifierError::CollateralExpired,
+            )));
+        }
+        Ok(validity.next_update)
+    }
+
+    fn cached_collateral(
+        &self,
+        lookup: &TdxCollateralCacheLookup,
+        parsed_quote: &ParsedTdxQuote,
+        pck_certificate_chain: &[TdxCertificate],
+        pck_tcb: &TdxPckTcb,
+        verification_time: u64,
+    ) -> Result<Option<TdxCollateralFetch>> {
+        let Some(entry) = self.cache_lock()?.get(lookup, verification_time) else {
+            return Ok(None);
+        };
+
+        let mut fetch = entry.fetch;
+        fetch.pck_certificate_chain = pck_certificate_chain.to_vec();
+        let cached_tcb_info = &fetch.collateral.tcb_info;
+        let tcb_status = match cached_tcb_info.tcb_status_for_quote(parsed_quote, pck_tcb) {
+            Ok(tcb_status) => tcb_status,
+            Err(error) => {
+                debug!(error = %error, "cached TDX collateral failed quote TCB matching");
+                return Err(RegistrarError::TdxAttestation(Box::new(error)));
+            }
+        };
+        fetch.collateral.tcb_status = tcb_status;
+
+        match Self::verify_collateral_for_quote(&fetch, parsed_quote, verification_time) {
+            Ok(expiration) => {
+                self.record_collateral_cache_earliest_expiration(verification_time)?;
+                debug!(
+                    expiration,
+                    cache_key_expiration = entry.key.expiration,
+                    "using cached TDX collateral"
+                );
+                Ok(Some(fetch))
+            }
+            Err(error) => {
+                debug!(error = %error, "cached TDX collateral failed quote verification");
+                Err(error)
+            }
+        }
+    }
+
     fn pck_certificate_chain_from_quote(
-        parsed_quote: &base_proof_tee_tdx_verifier::ParsedTdxQuote,
+        parsed_quote: &ParsedTdxQuote,
     ) -> Result<Vec<TdxCertificate>> {
         if parsed_quote.certification_data_type != PCK_CERT_CHAIN_CERTIFICATION_DATA_TYPE {
             return Err(RegistrarError::TdxAttestation(Box::new(
@@ -528,6 +945,7 @@ enum TdxHydrationError {
     DisallowedCrlHost { url: String },
     RootCaNotTrusted { expected: B256, actual: B256 },
     InvalidPercentEncoding,
+    CachePoisoned { error: String },
     Pem(String),
 }
 
@@ -564,6 +982,9 @@ impl fmt::Display for TdxHydrationError {
                 )
             }
             Self::InvalidPercentEncoding => write!(f, "invalid percent-encoded Intel PCS header"),
+            Self::CachePoisoned { error } => {
+                write!(f, "TDX collateral cache lock poisoned: {error}")
+            }
             Self::Pem(error) => write!(f, "PEM parse failed: {error}"),
         }
     }
@@ -586,6 +1007,175 @@ mod tests {
             is_ca: false,
             tbs_certificate: Bytes::new(),
             signature: Bytes::new(),
+        }
+    }
+
+    fn certificate_with_validity(not_before: u64, not_after: u64) -> TdxCertificate {
+        TdxCertificate {
+            raw: Bytes::from_static(b"cert"),
+            serial: Bytes::new(),
+            subject_public_key: Bytes::new(),
+            issuer_public_key: Bytes::new(),
+            not_before,
+            not_after,
+            is_ca: false,
+            tbs_certificate: Bytes::new(),
+            signature: Bytes::new(),
+        }
+    }
+
+    fn signed_collateral(
+        body_key: &'static str,
+        issue_time: u64,
+        next_update: u64,
+    ) -> TdxSignedCollateral {
+        let raw = Bytes::from(
+            format!(r#"{{"{body_key}":{{"issueDate":{issue_time},"nextUpdate":{next_update}}}}}"#)
+                .into_bytes(),
+        );
+        TdxSignedCollateral {
+            raw,
+            signing_chain: vec![certificate_with_validity(issue_time, next_update + 100)],
+            signature: Bytes::new(),
+            issue_time,
+            next_update,
+        }
+    }
+
+    fn collateral_fetch(tcb_next_update: u64, qe_next_update: u64) -> TdxCollateralFetch {
+        TdxCollateralFetch {
+            pck_certificate_chain: vec![certificate_with_validity(100, 500)],
+            collateral: TdxCollateral {
+                tcb_info: signed_collateral("tcbInfo", 100, tcb_next_update),
+                qe_identity: signed_collateral("enclaveIdentity", 100, qe_next_update),
+                tcb_status: base_proof_tee_tdx_verifier::IntelTcbStatus::UpToDate,
+            },
+            revocation: TdxRevocationEvidence { certificate_crls: Vec::new() },
+            trusted_root_ca_hash: B256::repeat_byte(0x11),
+        }
+    }
+
+    fn signed_tcb_info_without_matching_level(
+        issue_time: u64,
+        next_update: u64,
+    ) -> TdxSignedCollateral {
+        let tdx_components = (0..16).map(|_| serde_json::json!({ "svn": 1 })).collect::<Vec<_>>();
+        let sgx_components = (0..16).map(|_| serde_json::json!({ "svn": 0 })).collect::<Vec<_>>();
+        let raw = serde_json::json!({
+            "tcbInfo": {
+                "id": "TDX",
+                "teeType": "0x81",
+                "issueDate": "1970-01-01T00:01:40Z",
+                "nextUpdate": "1970-01-01T00:05:00Z",
+                "fmspc": "020202020202",
+                "pceId": "0303",
+                "tdxModule": {
+                    "mrsigner": "00".repeat(48),
+                    "attributes": "00".repeat(8),
+                    "attributesMask": "00".repeat(8),
+                },
+                "tdxModuleIdentities": [],
+                "tcbLevels": [{
+                    "tcb": {
+                        "pcesvn": 0,
+                        "tdxtcbcomponents": tdx_components,
+                        "sgxtcbcomponents": sgx_components,
+                    },
+                    "tcbStatus": "UpToDate",
+                }],
+            },
+        })
+        .to_string()
+        .into_bytes();
+
+        TdxSignedCollateral {
+            raw: Bytes::from(raw),
+            signing_chain: vec![certificate_with_validity(issue_time, next_update + 100)],
+            signature: Bytes::new(),
+            issue_time,
+            next_update,
+        }
+    }
+
+    fn signed_tcb_info_matching_quote(issue_time: u64, next_update: u64) -> TdxSignedCollateral {
+        let tdx_components = (0..16).map(|_| serde_json::json!({ "svn": 0 })).collect::<Vec<_>>();
+        let sgx_components = (0..16).map(|_| serde_json::json!({ "svn": 0 })).collect::<Vec<_>>();
+        let raw = serde_json::json!({
+            "tcbInfo": {
+                "id": "TDX",
+                "teeType": "0x81",
+                "issueDate": "1970-01-01T00:01:40Z",
+                "nextUpdate": "1970-01-01T00:05:00Z",
+                "fmspc": "020202020202",
+                "pceId": "0303",
+                "tdxModule": {
+                    "mrsigner": "00".repeat(48),
+                    "attributes": "00".repeat(8),
+                    "attributesMask": "00".repeat(8),
+                },
+                "tdxModuleIdentities": [],
+                "tcbLevels": [{
+                    "tcb": {
+                        "pcesvn": 0,
+                        "tdxtcbcomponents": tdx_components,
+                        "sgxtcbcomponents": sgx_components,
+                    },
+                    "tcbStatus": "UpToDate",
+                }],
+            },
+        })
+        .to_string()
+        .into_bytes();
+
+        TdxSignedCollateral {
+            raw: Bytes::from(raw),
+            signing_chain: vec![certificate_with_validity(issue_time, next_update + 100)],
+            signature: Bytes::new(),
+            issue_time,
+            next_update,
+        }
+    }
+
+    fn cache_lookup() -> TdxCollateralCacheLookup {
+        TdxCollateralCacheLookup {
+            issuer: B256::repeat_byte(0x01),
+            pck_issuer: B256::repeat_byte(0x02),
+            fmspc: vec![0x02; 6],
+            ca: vec![0x03; 2],
+            collateral_version: "v4".to_string(),
+        }
+    }
+
+    fn parsed_quote() -> ParsedTdxQuote {
+        ParsedTdxQuote {
+            header: base_proof_tee_tdx_verifier::TdxQuoteHeader {
+                version: 4,
+                attestation_key_type: 2,
+                tee_type: 0x81,
+                reserved: [0; 4],
+                qe_svn: None,
+                pce_svn: None,
+            },
+            header_bytes: Bytes::new(),
+            report_body: Bytes::new(),
+            tee_tcb_svn: [0; 16],
+            mrseam: [0; 48],
+            mrsigner_seam: [0; 48],
+            seam_attributes: [0; 8],
+            mrtd: [0; 48],
+            rtmr0: [0; 48],
+            rtmr1: [0; 48],
+            rtmr2: [0; 48],
+            rtmr3: [0; 48],
+            report_data: [0; 64],
+            quote_signature: Bytes::new(),
+            attestation_public_key: Bytes::new(),
+            qe_report: Bytes::new(),
+            qe_report_signature: Bytes::new(),
+            qe_authentication_data: Bytes::new(),
+            certification_data_type: PCK_CERT_CHAIN_CERTIFICATION_DATA_TYPE,
+            certification_data: Bytes::new(),
+            attestation_key_data: Bytes::new(),
         }
     }
 
@@ -652,6 +1242,186 @@ mod tests {
                 .expect("root CA error should be retained as the source")
                 .to_string()
                 .contains("TDX certificate chain root is not trusted")
+        );
+    }
+
+    #[test]
+    fn collateral_cache_returns_fresh_hits() {
+        let mut cache = TdxCollateralCache::default();
+        let lookup = cache_lookup();
+        let fetch = collateral_fetch(300, 400);
+
+        let key = cache.insert(lookup.clone(), 300, fetch.clone());
+        let entry = cache.get(&lookup, 200).unwrap();
+
+        assert_eq!(entry.key, key);
+        assert_eq!(entry.fetch, fetch);
+    }
+
+    #[test]
+    fn collateral_cache_misses_unknown_or_expired_entries() {
+        let mut cache = TdxCollateralCache::default();
+        let lookup = cache_lookup();
+        let missing_lookup =
+            TdxCollateralCacheLookup { issuer: B256::repeat_byte(0xff), ..lookup.clone() };
+        cache.insert(lookup.clone(), 300, collateral_fetch(300, 400));
+
+        assert!(cache.get(&missing_lookup, 200).is_none());
+        assert!(cache.get(&lookup, 300).is_none());
+    }
+
+    #[test]
+    fn collateral_cache_lookup_includes_pck_issuer() {
+        let root = certificate_with_raw(b"root");
+        let pck_certificate_chain = vec![
+            root.clone(),
+            certificate_with_raw(b"pck-issuer-a"),
+            certificate_with_raw(b"pck-leaf"),
+        ];
+        let other_pck_certificate_chain =
+            vec![root, certificate_with_raw(b"pck-issuer-b"), certificate_with_raw(b"pck-leaf")];
+        let platform = TdxPlatformIdentity {
+            fmspc: Bytes::from(vec![0x02; 6]),
+            pce_id: Bytes::from(vec![0x03; 2]),
+        };
+        let pcs_tdx_base_url =
+            url::Url::parse("https://api.trustedservices.intel.com/tdx/certification/v4/").unwrap();
+
+        let lookup = TdxAttestationHydrator::collateral_cache_lookup(
+            &pck_certificate_chain,
+            &platform,
+            &pcs_tdx_base_url,
+        )
+        .unwrap();
+        let other_lookup = TdxAttestationHydrator::collateral_cache_lookup(
+            &other_pck_certificate_chain,
+            &platform,
+            &pcs_tdx_base_url,
+        )
+        .unwrap();
+
+        assert_eq!(lookup.issuer, other_lookup.issuer);
+        assert_ne!(lookup.pck_issuer, other_lookup.pck_issuer);
+        assert_ne!(lookup, other_lookup);
+
+        let mut cache = TdxCollateralCache::default();
+        cache.insert(lookup, 300, collateral_fetch(300, 400));
+
+        assert!(cache.get(&other_lookup, 200).is_none());
+    }
+
+    #[test]
+    fn collateral_cache_earliest_expiration_reports_minimum_fresh_entry() {
+        let mut cache = TdxCollateralCache::default();
+        let early_lookup = cache_lookup();
+        let late_lookup = TdxCollateralCacheLookup { fmspc: vec![0x04; 6], ..early_lookup.clone() };
+
+        cache.insert(early_lookup, 300, collateral_fetch(300, 400));
+        cache.insert(late_lookup, 1000, collateral_fetch(1000, 1100));
+
+        assert_eq!(cache.earliest_expiration(200), Some(300));
+        assert_eq!(cache.earliest_expiration(300), Some(1000));
+        assert_eq!(cache.earliest_expiration(1000), None);
+    }
+
+    #[test]
+    fn cached_collateral_keeps_entry_when_tcb_info_misses_quote() {
+        let hydrator = TdxAttestationHydrator::new(TdxAttestationConfig::intel_pcs()).unwrap();
+        let lookup = cache_lookup();
+        let mut fetch = collateral_fetch(300, 400);
+        fetch.collateral.tcb_info = signed_tcb_info_without_matching_level(100, 300);
+        hydrator.cache_lock().unwrap().insert(lookup.clone(), 300, fetch);
+
+        let error = hydrator
+            .cached_collateral(
+                &lookup,
+                &parsed_quote(),
+                &[certificate_with_validity(100, 500)],
+                &TdxPckTcb { sgx_tcb_svn: [0; 16], pce_svn: 0 },
+                150,
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .source()
+                .expect("TCB matching error should be retained as the source")
+                .to_string()
+                .contains("no TCB info level matches quote TCB")
+        );
+        assert!(hydrator.cache_lock().unwrap().get(&lookup, 150).is_some());
+        assert_eq!(hydrator.cache_lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cached_collateral_keeps_entry_when_quote_verification_fails() {
+        let hydrator = TdxAttestationHydrator::new(TdxAttestationConfig::intel_pcs()).unwrap();
+        let lookup = cache_lookup();
+        let pck_certificate_chain = vec![certificate_with_validity(100, 500)];
+        let mut fetch = collateral_fetch(300, 400);
+        fetch.collateral.tcb_info = signed_tcb_info_matching_quote(100, 300);
+        fetch.trusted_root_ca_hash = pck_certificate_chain[0].hash();
+        hydrator.cache_lock().unwrap().insert(lookup.clone(), 300, fetch);
+
+        let error = hydrator
+            .cached_collateral(
+                &lookup,
+                &parsed_quote(),
+                &pck_certificate_chain,
+                &TdxPckTcb { sgx_tcb_svn: [0; 16], pce_svn: 0 },
+                150,
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .source()
+                .expect("quote verification error should be retained as the source")
+                .to_string()
+                .contains("PCK certificate chain is invalid")
+        );
+        assert!(hydrator.cache_lock().unwrap().get(&lookup, 150).is_some());
+        assert_eq!(hydrator.cache_lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn collateral_freshness_returns_earliest_expiration() {
+        let fetch = collateral_fetch(300, 250);
+
+        let expiration =
+            TdxAttestationHydrator::validate_collateral_freshness(&fetch, 150).unwrap();
+
+        assert_eq!(expiration, 250);
+    }
+
+    #[test]
+    fn collateral_freshness_rejects_expired_collateral() {
+        let fetch = collateral_fetch(150, 250);
+
+        let error = TdxAttestationHydrator::validate_collateral_freshness(&fetch, 150).unwrap_err();
+
+        assert!(
+            error
+                .source()
+                .expect("expired collateral error should be retained as the source")
+                .to_string()
+                .contains("TDX collateral is expired")
+        );
+    }
+
+    #[test]
+    fn collateral_freshness_rejects_malformed_collateral() {
+        let mut fetch = collateral_fetch(300, 400);
+        fetch.collateral.tcb_info.raw = Bytes::from_static(b"not-json");
+
+        let error = TdxAttestationHydrator::validate_collateral_freshness(&fetch, 150).unwrap_err();
+
+        assert!(
+            error
+                .source()
+                .expect("malformed collateral error should be retained as the source")
+                .to_string()
+                .contains("TCB info collateral is invalid")
         );
     }
 }

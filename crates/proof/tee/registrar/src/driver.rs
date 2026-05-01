@@ -5,7 +5,7 @@
 //! to L1 via the [`TxManager`]. Also detects orphaned on-chain signers (those
 //! no longer backed by a healthy instance) and deregisters them.
 
-use std::{borrow::Cow, collections::HashSet, error::Error, fmt, time::Duration};
+use std::{borrow::Cow, collections::HashSet, error::Error, fmt, sync::Mutex, time::Duration};
 
 use alloy_primitives::{Address, Bytes, FixedBytes, hex};
 use alloy_sol_types::SolCall;
@@ -131,6 +131,9 @@ pub struct RegistrationDriver<D, P, R, T, S> {
     /// Pre-built HTTP client for CRL fetches. Built once at construction
     /// time when CRL checking is enabled. `None` when CRL is disabled.
     crl_http_client: Option<reqwest::Client>,
+    /// Lazily initialized TDX attestation hydrator reused across signers so
+    /// PCS collateral cache entries survive within and across poll cycles.
+    tdx_hydrator: Mutex<Option<TdxAttestationHydrator>>,
 }
 
 impl<D, P, R, T, S> fmt::Debug for RegistrationDriver<D, P, R, T, S> {
@@ -196,7 +199,15 @@ where
         } else {
             None
         };
-        Self { fleets, registry, tx_manager, signer_client, config, crl_http_client }
+        Self {
+            fleets,
+            registry,
+            tx_manager,
+            signer_client,
+            config,
+            crl_http_client,
+            tdx_hydrator: Mutex::new(None),
+        }
     }
 
     /// Runs the registration loop until cancelled.
@@ -865,11 +876,23 @@ where
                 Ok(Cow::Borrowed(attestation_bytes))
             }
             SignerAttestationKind::Tdx => {
-                let hydrator = TdxAttestationHydrator::new(self.config.tdx_attestation.clone())?;
+                let hydrator = self.tdx_hydrator()?;
                 let input = hydrator.hydrate_for_signer(attestation_bytes, signer_address).await?;
                 Ok(Cow::Owned(input))
             }
         }
+    }
+
+    fn tdx_hydrator(&self) -> Result<TdxAttestationHydrator> {
+        let mut hydrator = self.tdx_hydrator.lock().map_err(|e| {
+            RegistrarError::TdxAttestation(format!("TDX hydrator cache lock poisoned: {e}").into())
+        })?;
+        if let Some(hydrator) = hydrator.as_ref() {
+            return Ok(hydrator.clone());
+        }
+        let new_hydrator = TdxAttestationHydrator::new(self.config.tdx_attestation.clone())?;
+        *hydrator = Some(new_hydrator.clone());
+        Ok(new_hydrator)
     }
 
     /// Checks the attestation's intermediate certificates against CRLs and

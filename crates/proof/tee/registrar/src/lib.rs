@@ -41,7 +41,11 @@ mod traits;
 pub use traits::{InstanceDiscovery, SignerClient};
 
 mod tdx;
-pub use tdx::{MAX_TDX_COLLATERAL_RESPONSE_BYTES, TdxAttestationHydrator, TdxCollateralFetch};
+pub use tdx::{
+    MAX_TDX_COLLATERAL_RESPONSE_BYTES, TdxAttestationHydrator, TdxCollateralCache,
+    TdxCollateralCacheEntry, TdxCollateralCacheKey, TdxCollateralCacheLookup, TdxCollateralFetch,
+    TdxCollateralProvider,
+};
 
 mod types;
 pub use types::{
