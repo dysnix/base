@@ -30,6 +30,12 @@ sol! {
         /// whether its image hash matches the current expected value.
         function isRegisteredSigner(address signer) external view returns (bool);
 
+        /// Returns the image hash stored for a registered signer.
+        function signerImageHash(address signer) external view returns (bytes32);
+
+        /// Returns the expected TEE image hash from the current `AggregateVerifier`.
+        function getExpectedImageHash() external view returns (bytes32);
+
         /// Returns all currently registered signer addresses.
         function getRegisteredSigners() external view returns (address[]);
     }
@@ -123,6 +129,8 @@ mod tests {
         assert_ne!(ITEEProverRegistry::deregisterSignerCall::SELECTOR, [0u8; 4]);
         assert_ne!(ITEEProverRegistry::isValidSignerCall::SELECTOR, [0u8; 4]);
         assert_ne!(ITEEProverRegistry::isRegisteredSignerCall::SELECTOR, [0u8; 4]);
+        assert_ne!(ITEEProverRegistry::signerImageHashCall::SELECTOR, [0u8; 4]);
+        assert_ne!(ITEEProverRegistry::getExpectedImageHashCall::SELECTOR, [0u8; 4]);
         assert_ne!(ITEEProverRegistry::getRegisteredSignersCall::SELECTOR, [0u8; 4]);
     }
 }
