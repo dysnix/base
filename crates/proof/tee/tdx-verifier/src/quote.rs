@@ -399,7 +399,7 @@ impl TdxQuote {
             .ok_or_else(|| {
                 TdxVerifierError::InvalidQuote("QE report data hash read out of bounds".into())
             })?;
-        if report_data_hash != expected_report_data.as_slice() {
+        if report_data_hash != &expected_report_data[..] {
             return Err(TdxVerifierError::PckCertChainInvalid(
                 "QE report data does not bind quote attestation key".into(),
             ));

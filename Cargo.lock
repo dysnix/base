@@ -5341,6 +5341,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "base-proof-tee-tdx-attestation-prover"
+version = "0.0.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-signer-local",
+ "alloy-sol-types",
+ "async-trait",
+ "base-proof-contracts",
+ "base-proof-tee-attestation",
+ "base-proof-tee-tdx-verifier",
+ "boundless-market",
+ "risc0-ethereum-contracts",
+ "risc0-zkvm",
+ "rstest",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "base-proof-tee-tdx-prover"
 version = "0.0.0"
 dependencies = [

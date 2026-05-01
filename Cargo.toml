@@ -34,6 +34,7 @@ members = [
   "crates/proof/tee/tdx-verifier",
   "crates/proof/tee/tdx-runtime",
   "crates/proof/tee/nitro-attestation-prover",
+  "crates/proof/tee/tdx-attestation-prover",
   "crates/proof/zk/client",
   "crates/proof/zk/db",
   "crates/proof/zk/outbox",
@@ -251,6 +252,7 @@ base-proof-driver = { path = "crates/proof/driver", default-features = false }
 base-proof-executor = { path = "crates/proof/executor", default-features = false }
 base-proof-preimage = { path = "crates/proof/preimage", default-features = false }
 base-proof-primitives = { path = "crates/proof/primitives", default-features = false }
+base-proof-tee-tdx-attestation-prover = { path = "crates/proof/tee/tdx-attestation-prover" }
 base-proof-tee-nitro-attestation-prover = { path = "crates/proof/tee/nitro-attestation-prover" }
 
 # Succinct (OP Succinct / SP1 proving)
