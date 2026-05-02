@@ -660,7 +660,7 @@ Check:
 - [ ] Local contract registration succeeds.
 - [ ] Local `signerImageHash` equals image-hash tool output.
 - [ ] Local `isValidSigner` passes for matching image hash and fails for wrong
-  image hash.
+      image hash.
 - [ ] Testnet TDX registration succeeds.
 - [ ] Testnet `isValidSigner` passes.
 - [ ] Registrar can run with both Nitro and TDX fleets configured.

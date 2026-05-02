@@ -214,7 +214,10 @@ impl TdxAttestationHydrator {
     ) -> Result<Vec<u8>> {
         let attestation = Self::decode_attestation_payload(attestation_bytes)?;
         let collateral = self.fetch_collateral(&attestation.quote).await?;
-        let verification_time = Self::now_seconds()?;
+        let verification_time = Self::quote_verification_time_seconds(
+            attestation.quote_timestamp_millis,
+            Self::now_seconds()?,
+        )?;
         let verifier_input = TdxVerifierInput {
             quote: attestation.quote,
             pck_certificate_chain: collateral.pck_certificate_chain,
@@ -430,6 +433,25 @@ impl TdxAttestationHydrator {
             .duration_since(UNIX_EPOCH)
             .map_err(|e| RegistrarError::TdxAttestation(Box::new(e)))
             .map(|duration| duration.as_secs())
+    }
+
+    /// Returns a verifier timestamp that keeps freshly collected quotes strictly in the past.
+    pub fn quote_verification_time_seconds(
+        quote_timestamp_millis: u64,
+        now_seconds: u64,
+    ) -> Result<u64> {
+        let quote_timestamp_seconds = quote_timestamp_millis / 1_000;
+        if quote_timestamp_seconds > now_seconds {
+            return Err(RegistrarError::TdxAttestation(Box::new(
+                TdxHydrationError::FutureQuoteTimestamp { quote_timestamp_seconds, now_seconds },
+            )));
+        }
+        if quote_timestamp_seconds == now_seconds {
+            return now_seconds.checked_add(1).ok_or_else(|| {
+                RegistrarError::TdxAttestation(Box::new(TdxHydrationError::TimestampOverflow))
+            });
+        }
+        Ok(now_seconds)
     }
 
     /// Builds the cache lookup key for a quote's platform collateral.
@@ -971,6 +993,8 @@ enum TdxHydrationError {
     ResponseTooLarge,
     DisallowedCrlHost { url: String },
     RootCaNotTrusted { expected: B256, actual: B256 },
+    FutureQuoteTimestamp { quote_timestamp_seconds: u64, now_seconds: u64 },
+    TimestampOverflow,
     InvalidPercentEncoding,
     CachePoisoned { error: String },
     Pem(String),
@@ -1008,6 +1032,13 @@ impl fmt::Display for TdxHydrationError {
                     "TDX certificate chain root is not trusted: expected {expected}, got {actual}"
                 )
             }
+            Self::FutureQuoteTimestamp { quote_timestamp_seconds, now_seconds } => {
+                write!(
+                    f,
+                    "TDX quote timestamp {quote_timestamp_seconds} is in the future relative to verifier time {now_seconds}"
+                )
+            }
+            Self::TimestampOverflow => write!(f, "TDX quote verification timestamp overflows"),
             Self::InvalidPercentEncoding => write!(f, "invalid percent-encoded Intel PCS header"),
             Self::CachePoisoned { error } => {
                 write!(f, "TDX collateral cache lock poisoned: {error}")
@@ -1529,6 +1560,36 @@ mod tests {
                 .expect("malformed collateral error should be retained as the source")
                 .to_string()
                 .contains("TCB info collateral is invalid")
+        );
+    }
+
+    #[test]
+    fn quote_verification_time_uses_now_for_past_quote() {
+        let verification_time =
+            TdxAttestationHydrator::quote_verification_time_seconds(149_999, 150).unwrap();
+
+        assert_eq!(verification_time, 150);
+    }
+
+    #[test]
+    fn quote_verification_time_advances_same_second_quote() {
+        let verification_time =
+            TdxAttestationHydrator::quote_verification_time_seconds(150_999, 150).unwrap();
+
+        assert_eq!(verification_time, 151);
+    }
+
+    #[test]
+    fn quote_verification_time_rejects_future_quote() {
+        let error =
+            TdxAttestationHydrator::quote_verification_time_seconds(151_000, 150).unwrap_err();
+
+        assert!(
+            error
+                .source()
+                .expect("future timestamp error should be retained as the source")
+                .to_string()
+                .contains("in the future")
         );
     }
 }
