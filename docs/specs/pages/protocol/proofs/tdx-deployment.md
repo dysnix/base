@@ -29,15 +29,21 @@ Operators must collect these values before enabling TDX registration:
 Run the prover in a real TDX guest with Linux TSM/configfs quote collection:
 
 ```sh
-base-prover-tdx server \
+sudo env BASE_TDX_SIGNER_KEY="$BASE_TDX_SIGNER_KEY" base-prover-tdx server \
   --l1-eth-url "$L1_ETH_URL" \
   --l2-eth-url "$L2_ETH_URL" \
   --l1-beacon-url "$L1_BEACON_URL" \
   --l2-chain-id "$L2_CHAIN_ID" \
   --listen-addr "0.0.0.0:7310" \
-  --report-name "base-tdx-prover" \
-  --signer-key "$BASE_TDX_SIGNER_KEY"
+  --report-name "base-tdx-prover"
 ```
+
+The Linux TSM/configfs report path is root-owned on common guest images. Run
+the configfs-backed prover under a service account that can create and read
+entries below `/sys/kernel/config/tsm/report`; for an initial smoke test, root is
+the simplest option. If the process lacks permission, quote collection fails
+when `enclave_signerAttestation` reads the report path. For first bring-up, bind
+the RPC listener to `127.0.0.1:7310` and expose it only with an SSH tunnel.
 
 For local tests without TDX hardware:
 
