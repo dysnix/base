@@ -230,8 +230,8 @@ impl TdxVerifier {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{Address, B256, Bytes, keccak256};
-    use alloy_sol_types::SolValue;
-    use base_proof_contracts::TDXVerifierJournal;
+    use alloy_sol_types::{SolCall, SolValue};
+    use base_proof_contracts::{ITDXTEEProverRegistry, TDXVerifierJournal, ZkCoProcessorType};
     use p256::ecdsa::{Signature, SigningKey, signature::Signer};
     use rstest::rstest;
     use sha2::{Digest, Sha256};
@@ -1031,6 +1031,35 @@ mod tests {
         assert_eq!(decoded.mrTdHash, journal.mrTdHash);
         assert_eq!(decoded.reportDataPrefix, journal.reportDataPrefix);
         assert_eq!(decoded.reportDataSuffix, journal.reportDataSuffix);
+    }
+
+    #[test]
+    fn fixture_quote_collateral_and_journal_encode_tdx_registration_calldata() {
+        let fixture = fixture();
+        let journal = TdxVerifier::verify(&fixture.input).unwrap();
+        let output = Bytes::from(TdxVerifier::encode_journal(&journal));
+        let proof_bytes = Bytes::from_static(b"fixture-zk-proof");
+
+        let calldata = ITDXTEEProverRegistry::registerTDXSignerCall {
+            output: output.clone(),
+            zkCoprocessor: ZkCoProcessorType::RiscZero,
+            proofBytes: proof_bytes.clone(),
+        }
+        .abi_encode();
+
+        assert_eq!(&calldata[..4], &ITDXTEEProverRegistry::registerTDXSignerCall::SELECTOR);
+        let decoded = ITDXTEEProverRegistry::registerTDXSignerCall::abi_decode(&calldata)
+            .expect("TDX registration calldata must decode");
+        assert_eq!(decoded.output, output);
+        assert_eq!(decoded.zkCoprocessor as u8, ZkCoProcessorType::RiscZero as u8);
+        assert_eq!(decoded.proofBytes, proof_bytes);
+
+        let decoded_journal =
+            <TDXVerifierJournal as SolValue>::abi_decode_validate(&decoded.output)
+                .expect("registration output must be an ABI-encoded TDX journal");
+        assert_eq!(decoded_journal.result as u8, TDXVerificationResult::Success as u8);
+        assert_eq!(decoded_journal.signer, fixture.input.expected_signer);
+        assert_eq!(decoded_journal.imageHash, journal.imageHash);
     }
 
     #[test]

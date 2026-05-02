@@ -1142,6 +1142,7 @@ where
 mod tests {
     use std::{
         collections::{HashMap, HashSet, VecDeque},
+        net::SocketAddr,
         sync::{
             Arc, Mutex,
             atomic::{AtomicU32, AtomicUsize, Ordering},
@@ -1163,13 +1164,16 @@ mod tests {
     };
     use base_tx_manager::{SendHandle, TxCandidate, TxManager, TxManagerError};
     use hex_literal::hex;
+    use jsonrpsee::{RpcModule, server::Server};
     use k256::ecdsa::SigningKey;
     use rstest::rstest;
     use tokio_util::sync::CancellationToken;
     use url::Url;
 
     use super::*;
-    use crate::{InstanceHealthStatus, RegistryClient, Result, SignerClient};
+    use crate::{
+        InstanceHealthStatus, RegistryClient, Result, SignerClient, StaticEndpointDiscovery,
+    };
 
     // ── Shared constants ────────────────────────────────────────────────
 
@@ -1260,6 +1264,35 @@ mod tests {
             allowed_tcb_statuses: vec![TDXTcbStatus::UpToDate],
         })
         .encode()
+    }
+
+    async fn spawn_static_tdx_mock_prover(
+        public_key: Vec<u8>,
+        attestation: Vec<u8>,
+    ) -> (Url, jsonrpsee::server::ServerHandle) {
+        let mut module = RpcModule::new(());
+        module
+            .register_async_method("enclave_attestationKind", |_params, _ctx, _ext| async {
+                Ok::<_, jsonrpsee::types::ErrorObjectOwned>("tdx")
+            })
+            .unwrap();
+        module
+            .register_async_method("enclave_signerPublicKey", move |_params, _ctx, _ext| {
+                let public_key = public_key.clone();
+                async move { Ok::<_, jsonrpsee::types::ErrorObjectOwned>(vec![public_key]) }
+            })
+            .unwrap();
+        module
+            .register_async_method("enclave_signerAttestation", move |_params, _ctx, _ext| {
+                let attestation = attestation.clone();
+                async move { Ok::<_, jsonrpsee::types::ErrorObjectOwned>(vec![attestation]) }
+            })
+            .unwrap();
+        let server =
+            Server::builder().build("127.0.0.1:0".parse::<SocketAddr>().unwrap()).await.unwrap();
+        let addr = server.local_addr().unwrap();
+        let handle = server.start(module);
+        (Url::parse(&format!("http://{addr}")).unwrap(), handle)
     }
 
     /// Builds a minimal `TransactionReceipt` for mock tx managers.
@@ -2107,6 +2140,37 @@ mod tests {
             &sent[0][..4],
             ITDXTEEProverRegistry::registerTDXSignerCall::SELECTOR,
             "TDX proofs should use registerTDXSigner"
+        );
+    }
+
+    #[tokio::test]
+    async fn static_discovery_mock_tdx_prover_submits_register_tdx_signer_calldata() {
+        let public_key = public_key_from_private(&HARDHAT_KEY_0);
+        let attestation = encoded_tdx_prover_input(&HARDHAT_KEY_0);
+        let (endpoint, handle) = spawn_static_tdx_mock_prover(public_key, attestation).await;
+        let tx = SharedTxManager::new();
+        let fleets = vec![ProverFleet::new(
+            SignerAttestationKind::Tdx,
+            StaticEndpointDiscovery::new(vec![endpoint]),
+            TdxProofProvider,
+        )];
+        let driver = RegistrationDriver::new_with_fleets(
+            fleets,
+            MockRegistry::with_signers(vec![]),
+            tx.clone(),
+            ProverClient::new(Duration::from_secs(1)),
+            default_config(CancellationToken::new()),
+        );
+
+        driver.step().await.unwrap();
+        handle.stop().unwrap();
+
+        let sent = tx.sent_calldata();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            &sent[0][..4],
+            ITDXTEEProverRegistry::registerTDXSignerCall::SELECTOR,
+            "static-discovered TDX mock prover should submit registerTDXSigner calldata"
         );
     }
 
