@@ -28,6 +28,11 @@ pub use driver::{DriverConfig, PipelineHandle, ProposerDriverControl, RecoveredS
 mod pipeline;
 pub use pipeline::{PipelineConfig, ProvingPipeline};
 
+mod proof_source;
+pub use proof_source::{
+    DualPlatformProof, PlatformProof, TeeProofError, TeeProofPlatform, TeeProofSources,
+};
+
 mod error;
 pub use error::{ProposerError, ProposerResult};
 

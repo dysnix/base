@@ -32,6 +32,7 @@ use crate::{
     driver::{DriverConfig, PipelineHandle, ProposerDriverControl},
     output_proposer::ProposalSubmitter,
     pipeline::{PipelineConfig, ProvingPipeline},
+    proof_source::TeeProofSources,
 };
 
 /// Top-level proposer service.
@@ -53,6 +54,8 @@ impl ProposerService {
             dispute_game_factory = %config.dispute_game_factory_addr,
             game_type = config.game_type,
             tee_image_hash = %config.tee_image_hash,
+            nitro_prover_rpc = %config.nitro_prover_rpc,
+            tdx_prover_rpc = %config.tdx_prover_rpc,
             poll_interval = ?config.poll_interval,
             rpc_timeout = ?config.rpc_timeout,
             max_parallel_proofs = config.max_parallel_proofs,
@@ -64,6 +67,7 @@ impl ProposerService {
 
         let cancel = CancellationToken::new();
         let signal_handle = RuntimeManager::install_signal_handler(cancel.clone());
+        let ready = Arc::new(AtomicBool::new(false));
 
         let l1_config = L1ClientConfig::new(config.l1_eth_rpc.clone())
             .with_timeout(config.rpc_timeout)
@@ -88,11 +92,17 @@ impl ProposerService {
         let rollup_client = Arc::new(RollupClient::new(rollup_config)?);
         info!(endpoint = %config.rollup_rpc, "Rollup client initialized");
 
-        let prover_client = HttpClientBuilder::default()
+        let nitro_prover_client = HttpClientBuilder::default()
             .request_timeout(crate::constants::PROVER_TIMEOUT)
-            .build(config.prover_rpc.as_str())
-            .wrap_err("failed to create prover RPC client")?;
-        info!(endpoint = %config.prover_rpc, "Prover RPC client initialized");
+            .build(config.nitro_prover_rpc.as_str())
+            .wrap_err("failed to create Nitro prover RPC client")?;
+        info!(platform = "nitro", endpoint = %config.nitro_prover_rpc, "Prover RPC client initialized");
+
+        let tdx_prover_client = HttpClientBuilder::default()
+            .request_timeout(crate::constants::PROVER_TIMEOUT)
+            .build(config.tdx_prover_rpc.as_str())
+            .wrap_err("failed to create TDX prover RPC client")?;
+        info!(platform = "tdx", endpoint = %config.tdx_prover_rpc, "Prover RPC client initialized");
 
         let anchor_registry = Arc::new(AnchorStateRegistryContractClient::new(
             config.anchor_state_registry_addr,
@@ -142,7 +152,9 @@ impl ProposerService {
         let factory_client = Arc::new(factory_client);
         let verifier_client: Arc<dyn AggregateVerifierClient> = Arc::new(verifier_client);
 
-        let prover_client: Arc<dyn ProverClient> = Arc::new(prover_client);
+        let nitro_prover_client: Arc<dyn ProverClient> = Arc::new(nitro_prover_client);
+        let tdx_prover_client: Arc<dyn ProverClient> = Arc::new(tdx_prover_client);
+        let proof_sources = TeeProofSources::new(nitro_prover_client, tdx_prover_client);
 
         let (output_proposer, proposer_address): (Arc<dyn crate::OutputProposer>, Option<Address>) =
             if config.dry_run {
@@ -206,6 +218,7 @@ impl ProposerService {
             max_retries: MAX_PROOF_RETRIES,
             recovery_scan_concurrency: config.recovery_scan_concurrency,
             tee_prover_registry_address: config.tee_prover_registry_address,
+            readiness: Some(Arc::clone(&ready)),
             driver: DriverConfig {
                 poll_interval: config.poll_interval,
                 block_interval,
@@ -219,7 +232,7 @@ impl ProposerService {
         };
         let pipeline = ProvingPipeline::new(
             pipeline_config,
-            prover_client,
+            proof_sources,
             l1_client,
             l2_client,
             rollup_client,
@@ -233,7 +246,6 @@ impl ProposerService {
         let driver_handle: Arc<dyn ProposerDriverControl> =
             Arc::new(PipelineHandle::new(pipeline, cancel.clone()));
 
-        let ready = Arc::new(AtomicBool::new(false));
         let health_handle: JoinHandle<Result<()>> = {
             let ready = Arc::clone(&ready);
             let addr = config.health_addr;
@@ -254,13 +266,12 @@ impl ProposerService {
             .await
             .map_err(|e| eyre::eyre!("failed to start proposer: {e}"))?;
 
-        ready.store(true, Ordering::SeqCst);
         Metrics::record_startup();
         info!(
             poll_interval = ?config.poll_interval,
             block_interval,
             game_type = config.game_type,
-            "Service is ready"
+            "Proposer service started"
         );
 
         cancel.cancelled().await;

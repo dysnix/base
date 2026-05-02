@@ -32,6 +32,18 @@ base_metrics::define_metrics! {
     #[describe("Total number of TEE proofs skipped due to invalid signer")]
     tee_signer_invalid_total: counter,
 
+    #[describe("TEE proof source readiness by platform")]
+    #[label(name = "platform", default = ["nitro", "tdx"])]
+    tee_platform_ready: gauge,
+
+    #[describe("Total number of successful TEE proofs by platform")]
+    #[label(name = "platform", default = ["nitro", "tdx"])]
+    tee_platform_proofs_total: counter,
+
+    #[describe("Total number of TEE proofs skipped due to invalid signer by platform")]
+    #[label(name = "platform", default = ["nitro", "tdx"])]
+    tee_platform_signer_invalid_total: counter,
+
     #[describe("Total errors by type")]
     #[label(
         name = "error_type",

@@ -290,24 +290,32 @@ Success criteria:
 - The printed `imageHash` matches the value stored in `signerImageHash` after registration.
 - The proposer preflight `isValidSigner` check succeeds only when the deployed `AggregateVerifier.TEE_IMAGE_HASH` matches this value.
 
-### 10. Update Proposal and Health Paths
+### 10. Update Dual-Prover Proposal and Health Paths
 
-Verify that the existing proposal flow works for both Nitro and TDX signers.
+Update the proposer so every proposal proof cycle sources proofs from both required TEE
+prover fleets: the existing AWS Nitro Enclave TEE prover fleet and the new Intel TDX
+prover fleet. TDX is not a replacement proof source for proposals; a proposal is ready
+only after the proposer has obtained platform-specific proofs from both fleets for the
+same proposal input.
 
 Actions:
 
-- Keep proposer config unchanged unless a clearer TDX-specific label is needed in docs; it already checks `TEEProverRegistry.isValidSigner`.
-- Keep `TEEVerifier` proof bytes unchanged.
-- Ensure TDX prover health can be gated on `isValidSigner` the same way Nitro health is gated.
+- Replace any single TEE prover endpoint assumption in proposer config with explicit Nitro and TDX proof source configuration.
+- For each proposal attempt, request a proof from the AWS Nitro Enclave TEE prover fleet and a proof from the TDX prover fleet for the same game/proposal input.
+- Treat a proposal proof cycle as unavailable if either platform fails to return a fresh, valid proof before the configured deadline.
+- Keep `TEEVerifier` proof bytes unchanged for each platform: `proposer(20) || signature(65)`.
+- Continue to validate each returned signer with `TEEProverRegistry.isValidSigner` before accepting that platform's proof.
+- Ensure TDX proposer health can be gated on `isValidSigner` the same way Nitro health is gated.
 - Add platform labels to health and metrics output.
 - Add failure messages that distinguish "registered but wrong image hash" from "not registered".
 
 Success criteria:
 
 - Existing proposer tests pass.
-- A local integration test can register a TDX signer in a mock registry and then pass health gating.
+- A local integration test registers one Nitro signer and one TDX signer in a mock registry, then proves the proposer requests and receives both platform proofs for the same proposal input.
+- Proposer readiness fails when either the Nitro proof source or the TDX proof source is unavailable, stale, or signed by an invalid signer.
 - A signer registered under one image hash is rejected when the configured game type expects a different image hash.
-- Health output identifies the active TEE platform without exposing keys or quote bytes.
+- Health output identifies both configured TEE platforms independently without exposing keys or quote bytes.
 
 ### 11. Add End-to-End Tests
 

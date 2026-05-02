@@ -247,6 +247,7 @@ mod tests {
     use super::*;
     use crate::{
         pipeline::PipelineConfig,
+        proof_source::TeeProofSources,
         test_utils::{
             MockAggregateVerifier, MockAnchorStateRegistry, MockDisputeGameFactory, MockL1, MockL2,
             MockOutputProposer, MockProver, MockRollupClient, test_anchor_root, test_sync_status,
@@ -281,6 +282,7 @@ mod tests {
                 max_retries: 3,
                 recovery_scan_concurrency: 8,
                 tee_prover_registry_address: None,
+                readiness: None,
                 driver: DriverConfig {
                     poll_interval: Duration::from_secs(3600),
                     block_interval: 512,
@@ -288,7 +290,7 @@ mod tests {
                     ..Default::default()
                 },
             },
-            prover,
+            TeeProofSources::new(Arc::clone(&prover), prover),
             l1,
             l2,
             rollup,

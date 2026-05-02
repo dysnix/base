@@ -30,7 +30,10 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use alloy_primitives::{Address, B256, Signature, keccak256};
@@ -39,7 +42,7 @@ use base_proof_contracts::{
     AggregateVerifierClient, AnchorStateRegistryClient, DisputeGameFactoryClient,
     ITEEProverRegistry, encode_extra_data,
 };
-use base_proof_primitives::{ProofJournal, ProofRequest, ProofResult, ProverClient};
+use base_proof_primitives::{ProofJournal, ProofRequest, Proposal};
 use base_proof_rpc::{L1Provider, L2Provider, RollupProvider, RpcError};
 use eyre::Result;
 use futures::{StreamExt, TryStreamExt, stream};
@@ -53,6 +56,7 @@ use crate::{
     driver::{DriverConfig, RecoveredState},
     error::ProposerError,
     output_proposer::OutputProposer,
+    proof_source::{DualPlatformProof, TeeProofError, TeeProofPlatform, TeeProofSources},
 };
 
 /// Configuration for the parallel proving pipeline.
@@ -69,6 +73,8 @@ pub struct PipelineConfig {
     /// Optional address of the `TEEProverRegistry` contract on L1.
     /// When set, the pipeline validates signers via `isValidSigner` before submission.
     pub tee_prover_registry_address: Option<Address>,
+    /// Optional readiness flag updated when platform proof health changes.
+    pub readiness: Option<Arc<AtomicBool>>,
 }
 
 /// Cached result from the last successful recovery.
@@ -96,11 +102,11 @@ struct CachedRecovery {
 /// Mutable state for the coordinator loop.
 struct PipelineState {
     /// Running proof tasks, each yielding `(target_block, result)`.
-    prove_tasks: JoinSet<(u64, Result<ProofResult, ProposerError>)>,
+    prove_tasks: JoinSet<(u64, Result<DualPlatformProof, TeeProofError>)>,
     /// At most one concurrent submission task.
     submit_tasks: JoinSet<SubmitOutcome>,
     /// Completed proofs waiting for sequential submission, keyed by target block.
-    proved: BTreeMap<u64, ProofResult>,
+    proved: BTreeMap<u64, DualPlatformProof>,
     /// Target blocks currently being proved.
     inflight: BTreeSet<u64>,
     /// Target block currently being submitted (at most one).
@@ -141,6 +147,15 @@ impl PipelineState {
         Metrics::pipeline_retries().set(self.retry_counts.values().sum::<u32>() as f64);
     }
 
+    fn is_empty(&self) -> bool {
+        self.prove_tasks.is_empty()
+            && self.submit_tasks.is_empty()
+            && self.proved.is_empty()
+            && self.inflight.is_empty()
+            && self.submitting.is_none()
+            && self.retry_counts.is_empty()
+    }
+
     fn prune_stale(&mut self, recovered_block: u64) {
         self.proved.retain(|&target, _| target > recovered_block);
         self.inflight.retain(|&target| target > recovered_block);
@@ -168,7 +183,7 @@ where
     F: DisputeGameFactoryClient,
 {
     config: PipelineConfig,
-    prover: Arc<dyn ProverClient>,
+    proof_sources: TeeProofSources,
     l1_client: Arc<L1>,
     l2_client: Arc<L2>,
     rollup_client: Arc<R>,
@@ -190,7 +205,7 @@ where
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
-            prover: Arc::clone(&self.prover),
+            proof_sources: self.proof_sources.clone(),
             l1_client: Arc::clone(&self.l1_client),
             l2_client: Arc::clone(&self.l2_client),
             rollup_client: Arc::clone(&self.rollup_client),
@@ -228,7 +243,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: PipelineConfig,
-        prover: Arc<dyn ProverClient>,
+        proof_sources: TeeProofSources,
         l1_client: Arc<L1>,
         l2_client: Arc<L2>,
         rollup_client: Arc<R>,
@@ -240,7 +255,7 @@ where
     ) -> Self {
         Self {
             config,
-            prover,
+            proof_sources,
             l1_client,
             l2_client,
             rollup_client,
@@ -320,6 +335,9 @@ where
             Metrics::safe_head().set(safe_head as f64);
             state.prune_stale(recovered.l2_block_number);
             self.dispatch_proofs(&recovered, safe_head, state).await?;
+            if self.is_idle_after_recovery(&recovered, safe_head, state) {
+                self.set_ready(true);
+            }
         }
         Ok(())
     }
@@ -399,7 +417,7 @@ where
             match self.build_proof_request_for(start_block, start_output, cursor).await {
                 Ok(request) => {
                     let claimed_output = request.claimed_l2_output_root;
-                    let prover = Arc::clone(&self.prover);
+                    let proof_sources = self.proof_sources.clone();
                     let target = cursor;
                     let cancel = self.cancel.child_token();
 
@@ -416,11 +434,13 @@ where
                         tokio::select! {
                             () = cancel.cancelled() => {
                                 proof_timer.disarm();
-                                (target, Err(ProposerError::Internal("cancelled".into())))
+                                (target, Err(TeeProofError::Other {
+                                    error: ProposerError::Internal("cancelled".into()),
+                                }))
                             }
-                            result = prover.prove(request) => {
+                            result = proof_sources.prove(request) => {
                                 drop(proof_timer);
-                                (target, result.map_err(|e| ProposerError::Prover(e.to_string())))
+                                (target, result)
                             }
                         }
                     });
@@ -440,6 +460,21 @@ where
         }
         state.record_gauges();
         Ok(())
+    }
+
+    fn is_idle_after_recovery(
+        &self,
+        recovered: &RecoveredState,
+        safe_head: u64,
+        state: &PipelineState,
+    ) -> bool {
+        let next_target =
+            match recovered.l2_block_number.checked_add(self.config.driver.block_interval) {
+                Some(target) => target,
+                None => return state.is_empty(),
+            };
+
+        next_target > safe_head && state.is_empty()
     }
 
     fn try_submit(&self, state: &mut PipelineState) {
@@ -487,7 +522,7 @@ where
                     submit_timer.disarm();
                     SubmitOutcome::Failed {
                         target_block: next_to_submit,
-                        proof: proof_result,
+                        proof: Box::new(proof_result),
                         error: e,
                     }
                 }
@@ -573,6 +608,7 @@ where
             SubmitOutcome::RootMismatch { target_block } => {
                 warn!(target_block, "Output root mismatch at submit time, resetting pipeline");
                 Metrics::root_mismatch_total().increment(1);
+                self.set_dual_proof_ready(false);
                 state.reset();
                 false
             }
@@ -583,7 +619,7 @@ where
                     target_block,
                     "Submission failed, will retry"
                 );
-                state.proved.insert(target_block, proof);
+                state.proved.insert(target_block, *proof);
                 state.submitting = None;
                 state.record_gauges();
                 false
@@ -604,11 +640,24 @@ where
 
     fn handle_proof_result(
         &self,
-        join_result: Result<(u64, Result<ProofResult, ProposerError>), tokio::task::JoinError>,
+        join_result: Result<
+            (u64, Result<DualPlatformProof, TeeProofError>),
+            tokio::task::JoinError,
+        >,
         state: &mut PipelineState,
     ) {
         match join_result {
             Ok((target, Ok(proof_result))) => {
+                let signer_validation_required = self.config.tee_prover_registry_address.is_some();
+                if !signer_validation_required {
+                    self.set_ready(true);
+                }
+                for proof in proof_result.platform_proofs() {
+                    if !signer_validation_required {
+                        Metrics::tee_platform_ready(proof.platform.label()).set(1.0);
+                    }
+                    Metrics::tee_platform_proofs_total(proof.platform.label()).increment(1);
+                }
                 state.inflight.remove(&target);
                 state.retry_counts.remove(&target);
                 state.proved.insert(target, proof_result);
@@ -616,6 +665,14 @@ where
                 info!(target_block = target, "Proof completed successfully");
             }
             Ok((target, Err(e))) => {
+                self.set_ready(false);
+                for (platform, ready) in e.platform_readiness() {
+                    Metrics::tee_platform_ready(platform.label()).set(if ready {
+                        1.0
+                    } else {
+                        0.0
+                    });
+                }
                 Metrics::errors_total(e.metric_label()).increment(1);
                 state.inflight.remove(&target);
                 let count = state.retry_counts.entry(target).or_insert(0);
@@ -642,10 +699,26 @@ where
                 debug!(error = %join_err, "Proof task cancelled");
             }
             Err(join_err) => {
+                self.set_ready(false);
+                Metrics::tee_platform_ready(TeeProofPlatform::Nitro.label()).set(0.0);
+                Metrics::tee_platform_ready(TeeProofPlatform::Tdx.label()).set(0.0);
                 warn!(error = %join_err, "Proof task panicked");
                 state.reset();
             }
         }
+    }
+
+    fn set_ready(&self, ready: bool) {
+        if let Some(readiness) = &self.config.readiness {
+            readiness.store(ready, Ordering::SeqCst);
+        }
+    }
+
+    fn set_dual_proof_ready(&self, ready: bool) {
+        let value = if ready { 1.0 } else { 0.0 };
+        self.set_ready(ready);
+        Metrics::tee_platform_ready(TeeProofPlatform::Nitro.label()).set(value);
+        Metrics::tee_platform_ready(TeeProofPlatform::Tdx.label()).set(value);
     }
 
     /// Attempts to recover on-chain state and fetch the safe head.
@@ -993,15 +1066,16 @@ where
     /// Recovers the TEE signer from the aggregate proposal and checks
     /// `isValidSigner` on the `TEEProverRegistry`.
     ///
-    /// Returns `Ok(true)` if the signer is valid, `Ok(false)` if not,
-    /// or `Err` if the check itself failed (RPC error, parse failure, etc.).
+    /// Returns a detailed signer validity status, or `Err` if the check itself
+    /// failed (RPC error, parse failure, etc.).
     async fn check_signer_validity(
         &self,
-        aggregate_proposal: &base_proof_primitives::Proposal,
+        platform: TeeProofPlatform,
+        aggregate_proposal: &Proposal,
         starting_block_number: u64,
         intermediate_roots: &[B256],
         registry_address: Address,
-    ) -> Result<bool, ProposerError> {
+    ) -> Result<SignerValidity, ProposerError> {
         // Reconstruct the journal that the enclave signed over.
         let journal = ProofJournal {
             proposer: self.config.driver.proposer_address,
@@ -1025,7 +1099,7 @@ where
             .recover_address_from_prehash(&digest)
             .map_err(|e| ProposerError::Internal(format!("signer recovery failed: {e}")))?;
 
-        debug!(signer = %signer, "recovered TEE signer from aggregate proposal");
+        debug!(platform = platform.label(), signer = %signer, "recovered TEE signer from aggregate proposal");
 
         // Call isValidSigner on the registry via the L1 provider.
         let calldata = ITEEProverRegistry::isValidSignerCall { signer }.abi_encode();
@@ -1039,26 +1113,127 @@ where
             ITEEProverRegistry::isValidSignerCall::abi_decode_returns(&result).map_err(|e| {
                 ProposerError::Internal(format!("failed to decode isValidSigner response: {e}"))
             })?;
-        debug!(signer = %signer, is_valid, "isValidSigner check result");
+        debug!(platform = platform.label(), signer = %signer, is_valid, "isValidSigner check result");
 
-        Ok(is_valid)
+        if is_valid {
+            return Ok(SignerValidity::Valid);
+        }
+
+        let registered_calldata =
+            ITEEProverRegistry::isRegisteredSignerCall { signer }.abi_encode();
+        let registered_result = match self
+            .l1_client
+            .call_contract(registry_address, registered_calldata.into(), None)
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    platform = platform.label(),
+                    signer = %signer,
+                    "failed to classify invalid TEE signer registration status"
+                );
+                return Ok(SignerValidity::Invalid { signer });
+            }
+        };
+        let is_registered = match ITEEProverRegistry::isRegisteredSignerCall::abi_decode_returns(
+            &registered_result,
+        ) {
+            Ok(is_registered) => is_registered,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    platform = platform.label(),
+                    signer = %signer,
+                    "failed to decode invalid TEE signer registration status"
+                );
+                return Ok(SignerValidity::Invalid { signer });
+            }
+        };
+
+        if !is_registered {
+            return Ok(SignerValidity::NotRegistered { signer });
+        }
+
+        let signer_image_calldata = ITEEProverRegistry::signerImageHashCall { signer }.abi_encode();
+        let signer_image_result = match self
+            .l1_client
+            .call_contract(registry_address, signer_image_calldata.into(), None)
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    platform = platform.label(),
+                    signer = %signer,
+                    "failed to classify invalid TEE signer image hash"
+                );
+                return Ok(SignerValidity::Invalid { signer });
+            }
+        };
+        let signer_image_hash =
+            match ITEEProverRegistry::signerImageHashCall::abi_decode_returns(&signer_image_result)
+            {
+                Ok(signer_image_hash) => signer_image_hash,
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        platform = platform.label(),
+                        signer = %signer,
+                        "failed to decode invalid TEE signer image hash"
+                    );
+                    return Ok(SignerValidity::Invalid { signer });
+                }
+            };
+
+        let expected_calldata = ITEEProverRegistry::getExpectedImageHashCall {}.abi_encode();
+        let expected_result = match self
+            .l1_client
+            .call_contract(registry_address, expected_calldata.into(), None)
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    platform = platform.label(),
+                    signer = %signer,
+                    signer_image_hash = %signer_image_hash,
+                    "failed to classify invalid TEE signer expected image hash"
+                );
+                return Ok(SignerValidity::Invalid { signer });
+            }
+        };
+        let expected_image_hash =
+            match ITEEProverRegistry::getExpectedImageHashCall::abi_decode_returns(&expected_result)
+            {
+                Ok(expected_image_hash) => expected_image_hash,
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        platform = platform.label(),
+                        signer = %signer,
+                        signer_image_hash = %signer_image_hash,
+                        "failed to decode invalid TEE signer expected image hash"
+                    );
+                    return Ok(SignerValidity::Invalid { signer });
+                }
+            };
+
+        Ok(SignerValidity::WrongImageHash { signer, signer_image_hash, expected_image_hash })
     }
 
     #[instrument(skip_all, fields(target_block = target_block, parent_address = %parent_address))]
     async fn validate_and_submit(
         &self,
-        proof_result: &ProofResult,
+        proof_result: &DualPlatformProof,
         target_block: u64,
         parent_address: Address,
     ) -> Result<(), SubmitAction> {
-        let (aggregate_proposal, proposals) = match proof_result {
-            ProofResult::Tee { aggregate_proposal, proposals } => (aggregate_proposal, proposals),
-            ProofResult::Zk { .. } => {
-                return Err(SubmitAction::Failed(ProposerError::Prover(
-                    "unexpected ZK proof result from TEE prover".into(),
-                )));
-            }
-        };
+        let submission_proof = proof_result.submission_proof();
+        let (aggregate_proposal, proposals) = submission_proof.proposals();
 
         // JIT validation: check that the proved output root still matches canonical.
         let canonical_output = self
@@ -1074,6 +1249,7 @@ where
                 target_block,
                 "Proposal output root does not match canonical chain at submit time"
             );
+            self.set_dual_proof_ready(false);
             return Err(SubmitAction::RootMismatch);
         }
 
@@ -1114,6 +1290,7 @@ where
                     target_block,
                     "Intermediate output root does not match canonical chain at submit time"
                 );
+                self.set_dual_proof_ready(false);
                 return Err(SubmitAction::RootMismatch);
             }
         }
@@ -1123,36 +1300,92 @@ where
         // and check `isValidSigner` on-chain. If the signer is invalid, skip
         // submission to avoid wasting gas on a transaction that will revert.
         if let Some(registry_address) = self.config.tee_prover_registry_address {
-            match self
-                .check_signer_validity(
-                    aggregate_proposal,
-                    starting_block_number,
-                    &intermediate_roots,
-                    registry_address,
-                )
-                .await
-            {
-                Ok(true) => {}
-                Ok(false) => {
-                    // The proof's signer is not registered on-chain. Discard
-                    // this proof so the pipeline re-proves with a (potentially
-                    // different, registered) enclave on the next attempt.
-                    warn!(target_block, "TEE signer is not valid on-chain, discarding proof");
-                    Metrics::tee_signer_invalid_total().increment(1);
-                    return Err(SubmitAction::Discard(ProposerError::Internal(
-                        "TEE signer not registered on-chain".into(),
-                    )));
-                }
-                Err(e) => {
-                    // Proceed on RPC failure: if L1 is unreachable, the
-                    // subsequent propose_output call will also fail and be
-                    // retried naturally. Blocking here would not save gas.
-                    // This also handles the case where the registry contract
-                    // is not yet deployed (rolling out the --tee-prover-registry-address
-                    // config before the contract exists on-chain).
-                    warn!(error = %e, target_block, "signer validity check failed, proceeding anyway");
+            for platform_proof in proof_result.platform_proofs() {
+                let (platform_aggregate, _) = platform_proof.proposals();
+                match self
+                    .check_signer_validity(
+                        platform_proof.platform,
+                        platform_aggregate,
+                        starting_block_number,
+                        &intermediate_roots,
+                        registry_address,
+                    )
+                    .await
+                {
+                    Ok(SignerValidity::Valid) => {
+                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(1.0);
+                    }
+                    Ok(SignerValidity::Invalid { signer }) => {
+                        self.set_ready(false);
+                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(0.0);
+                        Metrics::tee_platform_signer_invalid_total(platform_proof.platform.label())
+                            .increment(1);
+                        Metrics::tee_signer_invalid_total().increment(1);
+                        warn!(
+                            platform = platform_proof.platform.label(),
+                            signer = %signer,
+                            target_block,
+                            "TEE signer is invalid on-chain, discarding proof"
+                        );
+                        return Err(SubmitAction::Discard(ProposerError::Internal(format!(
+                            "{} TEE signer invalid on-chain",
+                            platform_proof.platform
+                        ))));
+                    }
+                    Ok(SignerValidity::NotRegistered { signer }) => {
+                        self.set_ready(false);
+                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(0.0);
+                        Metrics::tee_platform_signer_invalid_total(platform_proof.platform.label())
+                            .increment(1);
+                        Metrics::tee_signer_invalid_total().increment(1);
+                        warn!(
+                            platform = platform_proof.platform.label(),
+                            signer = %signer,
+                            target_block,
+                            "TEE signer is not registered on-chain, discarding proof"
+                        );
+                        return Err(SubmitAction::Discard(ProposerError::Internal(format!(
+                            "{} TEE signer not registered on-chain",
+                            platform_proof.platform
+                        ))));
+                    }
+                    Ok(SignerValidity::WrongImageHash {
+                        signer,
+                        signer_image_hash,
+                        expected_image_hash,
+                    }) => {
+                        self.set_ready(false);
+                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(0.0);
+                        Metrics::tee_platform_signer_invalid_total(platform_proof.platform.label())
+                            .increment(1);
+                        Metrics::tee_signer_invalid_total().increment(1);
+                        warn!(
+                            platform = platform_proof.platform.label(),
+                            signer = %signer,
+                            signer_image_hash = %signer_image_hash,
+                            expected_image_hash = %expected_image_hash,
+                            target_block,
+                            "TEE signer is registered with the wrong image hash, discarding proof"
+                        );
+                        return Err(SubmitAction::Discard(ProposerError::Internal(format!(
+                            "{} TEE signer registered with wrong image hash: signer_image_hash={}, expected_image_hash={}",
+                            platform_proof.platform, signer_image_hash, expected_image_hash
+                        ))));
+                    }
+                    Err(e) => {
+                        self.set_ready(false);
+                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(0.0);
+                        warn!(
+                            error = %e,
+                            platform = platform_proof.platform.label(),
+                            target_block,
+                            "signer validity check failed, retrying submission"
+                        );
+                        return Err(SubmitAction::Failed(e));
+                    }
                 }
             }
+            self.set_ready(true);
         }
 
         info!(
@@ -1265,6 +1498,19 @@ where
     }
 }
 
+/// Result of a platform signer registry validation.
+#[derive(Debug)]
+enum SignerValidity {
+    /// Signer is registered and matches the expected image hash.
+    Valid,
+    /// Signer failed `isValidSigner`, but diagnostics could not classify why.
+    Invalid { signer: Address },
+    /// Signer is not registered in the TEE prover registry.
+    NotRegistered { signer: Address },
+    /// Signer is registered but under a different image hash.
+    WrongImageHash { signer: Address, signer_image_hash: B256, expected_image_hash: B256 },
+}
+
 /// Internal action after a submission attempt.
 #[derive(Debug)]
 enum SubmitAction {
@@ -1296,24 +1542,35 @@ enum SubmitOutcome {
     Success { target_block: u64 },
     GameAlreadyExists { target_block: u64 },
     RootMismatch { target_block: u64 },
-    Failed { target_block: u64, proof: ProofResult, error: ProposerError },
+    Failed { target_block: u64, proof: Box<DualPlatformProof>, error: ProposerError },
     Discard { target_block: u64, error: ProposerError },
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc, time::Duration};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
-    use alloy_primitives::{Address, B256};
-    use base_proof_primitives::{ProofResult, Proposal, ProverClient};
+    use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
+    use alloy_signer::SignerSync;
+    use alloy_signer_local::PrivateKeySigner;
+    use alloy_sol_types::{SolCall, SolValue};
+    use base_proof_primitives::{ProofRequest, ProofResult, Proposal, ProverClient};
+    use base_proof_rpc::RpcResult;
     use rstest::rstest;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::test_utils::{
-        MockAggregateVerifier, MockAnchorStateRegistry, MockDisputeGameFactory, MockL1, MockL2,
-        MockOutputProposer, MockProver, MockRollupClient, test_anchor_root, test_proposal,
-        test_sync_status,
+    use crate::{
+        proof_source::PlatformProof,
+        test_utils::{
+            MockAggregateVerifier, MockAnchorStateRegistry, MockDisputeGameFactory, MockL1, MockL2,
+            MockOutputProposer, MockProver, MockRollupClient, test_anchor_root, test_proposal,
+            test_sync_status,
+        },
     };
 
     // ---- Named constants for test data ----
@@ -1343,6 +1600,185 @@ mod tests {
         let mut bytes = [0u8; 20];
         bytes[12..20].copy_from_slice(&(index + 1).to_be_bytes());
         Address::new(bytes)
+    }
+
+    fn proof_sources(prover: Arc<dyn ProverClient>) -> TeeProofSources {
+        TeeProofSources::new(Arc::clone(&prover), prover)
+    }
+
+    fn dual_proof_result(target_block: u64) -> DualPlatformProof {
+        let proof = submit_proof_result(target_block);
+        DualPlatformProof::new(
+            PlatformProof::new(TeeProofPlatform::Nitro, proof.clone()).unwrap(),
+            PlatformProof::new(TeeProofPlatform::Tdx, proof).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[derive(Debug)]
+    struct RecordingSignedProver {
+        platform: TeeProofPlatform,
+        signer: PrivateKeySigner,
+        calls: Arc<Mutex<Vec<(TeeProofPlatform, ProofRequest)>>>,
+        block_interval: u64,
+        proposer_address: Address,
+        tee_image_hash: B256,
+    }
+
+    #[async_trait::async_trait]
+    impl ProverClient for RecordingSignedProver {
+        async fn prove(
+            &self,
+            request: ProofRequest,
+        ) -> Result<ProofResult, Box<dyn std::error::Error + Send + Sync>> {
+            self.calls.lock().unwrap().push((self.platform, request.clone()));
+
+            let target = request.claimed_l2_block_number;
+            let start = target.saturating_sub(self.block_interval);
+            let proposals: Vec<Proposal> = ((start + 1)..=target).map(test_proposal).collect();
+            let mut aggregate_proposal = test_proposal(target);
+            let intermediate_roots = proposals
+                .iter()
+                .enumerate()
+                .filter_map(|(index, proposal)| {
+                    let block = start + index as u64 + 1;
+                    (block.is_multiple_of(SUBMIT_INTERMEDIATE_INTERVAL))
+                        .then_some(proposal.output_root)
+                })
+                .collect::<Vec<_>>();
+            let journal = ProofJournal {
+                proposer: self.proposer_address,
+                l1_origin_hash: aggregate_proposal.l1_origin_hash,
+                prev_output_root: aggregate_proposal.prev_output_root,
+                starting_l2_block: start,
+                output_root: aggregate_proposal.output_root,
+                ending_l2_block: target,
+                intermediate_roots,
+                config_hash: aggregate_proposal.config_hash,
+                tee_image_hash: self.tee_image_hash,
+            };
+            let digest = keccak256(journal.encode());
+            let signature = self.signer.sign_hash_sync(&digest)?;
+            aggregate_proposal.signature = Bytes::from(signature.as_rsy().to_vec());
+
+            Ok(ProofResult::Tee { aggregate_proposal, proposals })
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingProver {
+        message: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl ProverClient for FailingProver {
+        async fn prove(
+            &self,
+            _request: ProofRequest,
+        ) -> Result<ProofResult, Box<dyn std::error::Error + Send + Sync>> {
+            Err(self.message.into())
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockRegistryL1 {
+        latest_block_number: u64,
+        expected_image_hash: B256,
+        signer_image_hashes: HashMap<Address, B256>,
+        failing_call: Option<RegistryCall>,
+        failing_signer: Option<Address>,
+    }
+
+    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+    enum RegistryCall {
+        IsValidSigner,
+        IsRegisteredSigner,
+        SignerImageHash,
+        GetExpectedImageHash,
+    }
+
+    #[async_trait::async_trait]
+    impl L1Provider for MockRegistryL1 {
+        async fn block_number(&self) -> RpcResult<u64> {
+            Ok(self.latest_block_number)
+        }
+
+        async fn header_by_number(&self, _: Option<u64>) -> RpcResult<alloy_rpc_types_eth::Header> {
+            Ok(alloy_rpc_types_eth::Header { hash: B256::repeat_byte(0x11), ..Default::default() })
+        }
+
+        async fn header_by_hash(&self, _: B256) -> RpcResult<alloy_rpc_types_eth::Header> {
+            unimplemented!()
+        }
+
+        async fn block_receipts(
+            &self,
+            _: B256,
+        ) -> RpcResult<Vec<alloy_rpc_types_eth::TransactionReceipt>> {
+            unimplemented!()
+        }
+
+        async fn code_at(&self, _: Address, _: Option<u64>) -> RpcResult<Bytes> {
+            unimplemented!()
+        }
+
+        async fn call_contract(
+            &self,
+            _: Address,
+            calldata: Bytes,
+            _: Option<u64>,
+        ) -> RpcResult<Bytes> {
+            let selector = &calldata[..4];
+            if selector == ITEEProverRegistry::isValidSignerCall::SELECTOR.as_slice() {
+                let signer = Self::calldata_signer(&calldata);
+                if self.should_fail(RegistryCall::IsValidSigner, signer) {
+                    return Err(RpcError::InvalidResponse("isValidSigner failed".into()));
+                }
+                let is_valid = self
+                    .signer_image_hashes
+                    .get(&signer)
+                    .is_some_and(|image_hash| *image_hash == self.expected_image_hash);
+                return Ok(Bytes::from(SolValue::abi_encode(&is_valid)));
+            }
+            if selector == ITEEProverRegistry::isRegisteredSignerCall::SELECTOR.as_slice() {
+                let signer = Self::calldata_signer(&calldata);
+                if self.should_fail(RegistryCall::IsRegisteredSigner, signer) {
+                    return Err(RpcError::InvalidResponse("isRegisteredSigner failed".into()));
+                }
+                let is_registered = self.signer_image_hashes.contains_key(&signer);
+                return Ok(Bytes::from(SolValue::abi_encode(&is_registered)));
+            }
+            if selector == ITEEProverRegistry::signerImageHashCall::SELECTOR.as_slice() {
+                let signer = Self::calldata_signer(&calldata);
+                if self.should_fail(RegistryCall::SignerImageHash, signer) {
+                    return Err(RpcError::InvalidResponse("signerImageHash failed".into()));
+                }
+                let image_hash = self.signer_image_hashes.get(&signer).copied().unwrap_or_default();
+                return Ok(Bytes::from(SolValue::abi_encode(&image_hash)));
+            }
+            if selector == ITEEProverRegistry::getExpectedImageHashCall::SELECTOR.as_slice() {
+                if self.failing_call == Some(RegistryCall::GetExpectedImageHash) {
+                    return Err(RpcError::InvalidResponse("getExpectedImageHash failed".into()));
+                }
+                return Ok(Bytes::from(SolValue::abi_encode(&self.expected_image_hash)));
+            }
+            Err(RpcError::InvalidResponse("unexpected registry call".into()))
+        }
+
+        async fn get_balance(&self, _: Address) -> RpcResult<U256> {
+            Ok(U256::ZERO)
+        }
+    }
+
+    impl MockRegistryL1 {
+        fn calldata_signer(calldata: &[u8]) -> Address {
+            Address::from_slice(&calldata[16..36])
+        }
+
+        fn should_fail(&self, call: RegistryCall, signer: Address) -> bool {
+            self.failing_call == Some(call)
+                && self.failing_signer.is_none_or(|failing_signer| failing_signer == signer)
+        }
     }
 
     /// Builds a chain of `N` sequential games starting from the anchor,
@@ -1434,7 +1870,7 @@ mod tests {
 
         ProvingPipeline::new(
             pipeline_config,
-            prover,
+            proof_sources(prover),
             l1,
             l2,
             rollup,
@@ -1487,6 +1923,7 @@ mod tests {
                 max_retries: 1,
                 recovery_scan_concurrency: 8,
                 tee_prover_registry_address: None,
+                readiness: None,
                 driver: DriverConfig {
                     game_type: TEST_GAME_TYPE,
                     block_interval,
@@ -1494,7 +1931,7 @@ mod tests {
                     ..Default::default()
                 },
             },
-            prover,
+            proof_sources(prover),
             l1,
             l2,
             rollup,
@@ -1517,6 +1954,7 @@ mod tests {
                 max_retries: 3,
                 recovery_scan_concurrency: 8,
                 tee_prover_registry_address: None,
+                readiness: None,
                 driver: DriverConfig {
                     poll_interval: Duration::from_secs(3600),
                     block_interval: TEST_BLOCK_INTERVAL,
@@ -1544,6 +1982,7 @@ mod tests {
                 max_retries: 3,
                 recovery_scan_concurrency: 8,
                 tee_prover_registry_address: None,
+                readiness: None,
                 driver: DriverConfig {
                     poll_interval: Duration::from_millis(100),
                     block_interval: TEST_BLOCK_INTERVAL,
@@ -1679,6 +2118,7 @@ mod tests {
                 max_retries: 1,
                 recovery_scan_concurrency: 8,
                 tee_prover_registry_address: None,
+                readiness: None,
                 driver: DriverConfig {
                     game_type: TEST_GAME_TYPE,
                     block_interval: TEST_BLOCK_INTERVAL,
@@ -1686,7 +2126,7 @@ mod tests {
                     ..Default::default()
                 },
             },
-            prover,
+            proof_sources(prover),
             l1,
             l2,
             rollup,
@@ -1938,13 +2378,14 @@ mod tests {
                 max_retries: 3,
                 recovery_scan_concurrency: 8,
                 tee_prover_registry_address: None,
+                readiness: None,
                 driver: DriverConfig {
                     block_interval: TEST_BLOCK_INTERVAL,
                     intermediate_block_interval: TEST_BLOCK_INTERVAL,
                     ..Default::default()
                 },
             },
-            prover,
+            proof_sources(prover),
             l1,
             l2,
             rollup,
@@ -1962,10 +2403,7 @@ mod tests {
         };
 
         let mut state = PipelineState::new();
-        state.proved.insert(TEST_BLOCK_INTERVAL, {
-            let p = test_proposal(TEST_BLOCK_INTERVAL);
-            ProofResult::Tee { aggregate_proposal: p.clone(), proposals: vec![p] }
-        });
+        state.proved.insert(TEST_BLOCK_INTERVAL, dual_proof_result(TEST_BLOCK_INTERVAL));
         state.inflight.insert(TEST_BLOCK_INTERVAL * 2);
         state.inflight.insert(TEST_BLOCK_INTERVAL * 3);
         state.inflight.insert(TEST_BLOCK_INTERVAL * 4);
@@ -2010,13 +2448,14 @@ mod tests {
                 max_retries: 3,
                 recovery_scan_concurrency: 8,
                 tee_prover_registry_address: None,
+                readiness: None,
                 driver: DriverConfig {
                     block_interval: TEST_BLOCK_INTERVAL,
                     intermediate_block_interval: TEST_BLOCK_INTERVAL,
                     ..Default::default()
                 },
             },
-            prover,
+            proof_sources(prover),
             l1,
             l2,
             rollup,
@@ -2048,16 +2487,41 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn test_tick_marks_idle_pipeline_ready_after_successful_recovery() {
+        let readiness = Arc::new(AtomicBool::new(false));
+        let pipeline = test_pipeline(
+            PipelineConfig {
+                max_parallel_proofs: 1,
+                max_retries: 1,
+                recovery_scan_concurrency: 8,
+                tee_prover_registry_address: None,
+                readiness: Some(Arc::clone(&readiness)),
+                driver: DriverConfig {
+                    game_type: TEST_GAME_TYPE,
+                    block_interval: TEST_BLOCK_INTERVAL,
+                    intermediate_block_interval: TEST_BLOCK_INTERVAL,
+                    ..Default::default()
+                },
+            },
+            TEST_ANCHOR_BLOCK,
+            CancellationToken::new(),
+        );
+        let mut state = PipelineState::new();
+
+        pipeline.tick(&mut state).await.unwrap();
+
+        assert!(readiness.load(Ordering::SeqCst));
+        assert!(state.is_empty());
+    }
+
     // ---- State management tests ----
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_prune_stale_does_not_abort_inflight_submit() {
         let mut state = PipelineState::new();
         state.submitting = Some(512);
-        state.proved.insert(512, {
-            let p = test_proposal(512);
-            ProofResult::Tee { aggregate_proposal: p.clone(), proposals: vec![p] }
-        });
+        state.proved.insert(512, dual_proof_result(512));
         state.inflight.insert(512);
         state.retry_counts.insert(512, 1);
 
@@ -2116,12 +2580,407 @@ mod tests {
         ProofResult::Tee { aggregate_proposal: aggregate, proposals }
     }
 
+    fn signed_proof_request() -> ProofRequest {
+        ProofRequest {
+            l1_head: B256::repeat_byte(0x11),
+            agreed_l2_head_hash: B256::repeat_byte(0x30),
+            agreed_l2_output_root: B256::ZERO,
+            claimed_l2_output_root: B256::repeat_byte(SUBMIT_BLOCK_INTERVAL as u8),
+            claimed_l2_block_number: SUBMIT_BLOCK_INTERVAL,
+            proposer: Address::repeat_byte(0x44),
+            intermediate_block_interval: SUBMIT_INTERMEDIATE_INTERVAL,
+            l1_head_number: TEST_L1_BLOCK_NUMBER,
+            image_hash: B256::repeat_byte(0x55),
+        }
+    }
+
+    fn recording_sources(
+        calls: Arc<Mutex<Vec<(TeeProofPlatform, ProofRequest)>>>,
+        nitro_signer: PrivateKeySigner,
+        tdx_signer: PrivateKeySigner,
+    ) -> TeeProofSources {
+        let request = signed_proof_request();
+        let nitro: Arc<dyn ProverClient> = Arc::new(RecordingSignedProver {
+            platform: TeeProofPlatform::Nitro,
+            signer: nitro_signer,
+            calls: Arc::clone(&calls),
+            block_interval: SUBMIT_BLOCK_INTERVAL,
+            proposer_address: request.proposer,
+            tee_image_hash: request.image_hash,
+        });
+        let tdx: Arc<dyn ProverClient> = Arc::new(RecordingSignedProver {
+            platform: TeeProofPlatform::Tdx,
+            signer: tdx_signer,
+            calls,
+            block_interval: SUBMIT_BLOCK_INTERVAL,
+            proposer_address: request.proposer,
+            tee_image_hash: request.image_hash,
+        });
+        TeeProofSources::new(nitro, tdx)
+    }
+
+    fn registry_pipeline(
+        l1: MockRegistryL1,
+        readiness: Arc<AtomicBool>,
+    ) -> ProvingPipeline<
+        MockRegistryL1,
+        MockL2,
+        MockRollupClient,
+        MockAnchorStateRegistry,
+        MockDisputeGameFactory,
+    > {
+        let request = signed_proof_request();
+        let prover: Arc<dyn ProverClient> = Arc::new(MockProver {
+            delay: MOCK_PROVER_DELAY,
+            block_interval: SUBMIT_BLOCK_INTERVAL,
+        });
+        ProvingPipeline::new(
+            PipelineConfig {
+                max_parallel_proofs: 1,
+                max_retries: 1,
+                recovery_scan_concurrency: 8,
+                tee_prover_registry_address: Some(Address::repeat_byte(0x77)),
+                readiness: Some(readiness),
+                driver: DriverConfig {
+                    block_interval: SUBMIT_BLOCK_INTERVAL,
+                    intermediate_block_interval: SUBMIT_INTERMEDIATE_INTERVAL,
+                    proposer_address: request.proposer,
+                    tee_image_hash: request.image_hash,
+                    ..Default::default()
+                },
+            },
+            proof_sources(prover),
+            Arc::new(l1),
+            Arc::new(MockL2 { block_not_found: true, canonical_hash: None }),
+            Arc::new(MockRollupClient {
+                sync_status: test_sync_status(SUBMIT_BLOCK_INTERVAL, B256::ZERO),
+                output_roots: HashMap::new(),
+                max_safe_block: None,
+            }),
+            Arc::new(MockAnchorStateRegistry { anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK) }),
+            Arc::new(MockDisputeGameFactory::with_games(vec![])),
+            Arc::new(MockAggregateVerifier::default()),
+            Arc::new(MockOutputProposer),
+            CancellationToken::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn dual_proof_sources_request_both_platforms_for_same_input() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let nitro_signer = PrivateKeySigner::from_slice(&[1u8; 32]).unwrap();
+        let tdx_signer = PrivateKeySigner::from_slice(&[2u8; 32]).unwrap();
+        let sources = recording_sources(Arc::clone(&calls), nitro_signer, tdx_signer);
+        let request = signed_proof_request();
+
+        let proof = sources.prove(request.clone()).await.unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls.contains(&(TeeProofPlatform::Nitro, request.clone())));
+        assert!(calls.contains(&(TeeProofPlatform::Tdx, request)));
+        let (nitro_aggregate, _) = proof.nitro.proposals();
+        let (tdx_aggregate, _) = proof.tdx.proposals();
+        assert_ne!(nitro_aggregate.signature, tdx_aggregate.signature);
+        assert_eq!(nitro_aggregate.output_root, tdx_aggregate.output_root);
+        assert_eq!(nitro_aggregate.l2_block_number, tdx_aggregate.l2_block_number);
+    }
+
+    #[tokio::test]
+    async fn dual_proof_sources_preserve_single_platform_failure() {
+        let nitro: Arc<dyn ProverClient> = Arc::new(MockProver {
+            delay: MOCK_PROVER_DELAY,
+            block_interval: SUBMIT_BLOCK_INTERVAL,
+        });
+        let tdx: Arc<dyn ProverClient> = Arc::new(FailingProver { message: "unavailable" });
+        let sources = TeeProofSources::new(nitro, tdx);
+
+        let error = sources.prove(signed_proof_request()).await.unwrap_err();
+
+        assert!(matches!(&error, TeeProofError::Platform { platform: TeeProofPlatform::Tdx, .. }));
+        assert_eq!(
+            error.platform_readiness(),
+            [(TeeProofPlatform::Nitro, true), (TeeProofPlatform::Tdx, false)]
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_and_submit_accepts_registered_nitro_and_tdx_signers() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let nitro_signer = PrivateKeySigner::from_slice(&[3u8; 32]).unwrap();
+        let tdx_signer = PrivateKeySigner::from_slice(&[4u8; 32]).unwrap();
+        let sources =
+            recording_sources(Arc::clone(&calls), nitro_signer.clone(), tdx_signer.clone());
+        let request = signed_proof_request();
+        let proof = sources.prove(request.clone()).await.unwrap();
+        let readiness = Arc::new(AtomicBool::new(false));
+        let pipeline = registry_pipeline(
+            MockRegistryL1 {
+                latest_block_number: TEST_L1_BLOCK_NUMBER,
+                expected_image_hash: request.image_hash,
+                signer_image_hashes: HashMap::from([
+                    (nitro_signer.address(), request.image_hash),
+                    (tdx_signer.address(), request.image_hash),
+                ]),
+                failing_call: None,
+                failing_signer: None,
+            },
+            Arc::clone(&readiness),
+        );
+
+        let result =
+            pipeline.validate_and_submit(&proof, SUBMIT_BLOCK_INTERVAL, Address::ZERO).await;
+
+        assert!(result.is_ok());
+        assert!(readiness.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn validate_and_submit_retries_when_tdx_signer_validation_errors() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let nitro_signer = PrivateKeySigner::from_slice(&[13u8; 32]).unwrap();
+        let tdx_signer = PrivateKeySigner::from_slice(&[14u8; 32]).unwrap();
+        let sources =
+            recording_sources(Arc::clone(&calls), nitro_signer.clone(), tdx_signer.clone());
+        let request = signed_proof_request();
+        let proof = sources.prove(request.clone()).await.unwrap();
+        let readiness = Arc::new(AtomicBool::new(true));
+        let pipeline = registry_pipeline(
+            MockRegistryL1 {
+                latest_block_number: TEST_L1_BLOCK_NUMBER,
+                expected_image_hash: request.image_hash,
+                signer_image_hashes: HashMap::from([
+                    (nitro_signer.address(), request.image_hash),
+                    (tdx_signer.address(), request.image_hash),
+                ]),
+                failing_call: Some(RegistryCall::IsValidSigner),
+                failing_signer: Some(tdx_signer.address()),
+            },
+            Arc::clone(&readiness),
+        );
+
+        let result =
+            pipeline.validate_and_submit(&proof, SUBMIT_BLOCK_INTERVAL, Address::ZERO).await;
+
+        assert!(matches!(&result, Err(SubmitAction::Failed(_))));
+        assert!(!readiness.load(Ordering::SeqCst));
+        assert!(result.unwrap_err().to_string().contains("isValidSigner failed"));
+
+        let retry_pipeline = registry_pipeline(
+            MockRegistryL1 {
+                latest_block_number: TEST_L1_BLOCK_NUMBER,
+                expected_image_hash: request.image_hash,
+                signer_image_hashes: HashMap::from([
+                    (nitro_signer.address(), request.image_hash),
+                    (tdx_signer.address(), request.image_hash),
+                ]),
+                failing_call: None,
+                failing_signer: None,
+            },
+            Arc::clone(&readiness),
+        );
+
+        let retry_result =
+            retry_pipeline.validate_and_submit(&proof, SUBMIT_BLOCK_INTERVAL, Address::ZERO).await;
+
+        assert!(retry_result.is_ok());
+        assert!(readiness.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn validate_and_submit_rejects_unregistered_platform_signer() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let nitro_signer = PrivateKeySigner::from_slice(&[5u8; 32]).unwrap();
+        let tdx_signer = PrivateKeySigner::from_slice(&[6u8; 32]).unwrap();
+        let sources = recording_sources(calls, nitro_signer, tdx_signer);
+        let request = signed_proof_request();
+        let proof = sources.prove(request.clone()).await.unwrap();
+        let readiness = Arc::new(AtomicBool::new(true));
+        let pipeline = registry_pipeline(
+            MockRegistryL1 {
+                latest_block_number: TEST_L1_BLOCK_NUMBER,
+                expected_image_hash: request.image_hash,
+                signer_image_hashes: HashMap::new(),
+                failing_call: None,
+                failing_signer: None,
+            },
+            Arc::clone(&readiness),
+        );
+
+        let result =
+            pipeline.validate_and_submit(&proof, SUBMIT_BLOCK_INTERVAL, Address::ZERO).await;
+
+        assert!(matches!(&result, Err(SubmitAction::Discard(_))));
+        assert!(!readiness.load(Ordering::SeqCst));
+        assert!(result.unwrap_err().to_string().contains("not registered"));
+    }
+
+    #[tokio::test]
+    async fn validate_and_submit_rejects_registered_signer_with_wrong_image_hash() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let nitro_signer = PrivateKeySigner::from_slice(&[7u8; 32]).unwrap();
+        let tdx_signer = PrivateKeySigner::from_slice(&[8u8; 32]).unwrap();
+        let sources = recording_sources(calls, nitro_signer.clone(), tdx_signer.clone());
+        let request = signed_proof_request();
+        let proof = sources.prove(request.clone()).await.unwrap();
+        let readiness = Arc::new(AtomicBool::new(true));
+        let pipeline = registry_pipeline(
+            MockRegistryL1 {
+                latest_block_number: TEST_L1_BLOCK_NUMBER,
+                expected_image_hash: request.image_hash,
+                signer_image_hashes: HashMap::from([
+                    (nitro_signer.address(), B256::repeat_byte(0x99)),
+                    (tdx_signer.address(), request.image_hash),
+                ]),
+                failing_call: None,
+                failing_signer: None,
+            },
+            Arc::clone(&readiness),
+        );
+
+        let result =
+            pipeline.validate_and_submit(&proof, SUBMIT_BLOCK_INTERVAL, Address::ZERO).await;
+
+        assert!(matches!(&result, Err(SubmitAction::Discard(_))));
+        assert!(!readiness.load(Ordering::SeqCst));
+        assert!(result.unwrap_err().to_string().contains("wrong image hash"));
+    }
+
+    #[rstest]
+    #[case::registered_status(RegistryCall::IsRegisteredSigner)]
+    #[case::signer_image_hash(RegistryCall::SignerImageHash)]
+    #[case::expected_image_hash(RegistryCall::GetExpectedImageHash)]
+    #[tokio::test]
+    async fn validate_and_submit_discards_invalid_signer_when_diagnostics_fail(
+        #[case] failing_call: RegistryCall,
+    ) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let nitro_signer = PrivateKeySigner::from_slice(&[9u8; 32]).unwrap();
+        let tdx_signer = PrivateKeySigner::from_slice(&[10u8; 32]).unwrap();
+        let sources = recording_sources(calls, nitro_signer.clone(), tdx_signer.clone());
+        let request = signed_proof_request();
+        let proof = sources.prove(request.clone()).await.unwrap();
+        let readiness = Arc::new(AtomicBool::new(true));
+        let pipeline = registry_pipeline(
+            MockRegistryL1 {
+                latest_block_number: TEST_L1_BLOCK_NUMBER,
+                expected_image_hash: request.image_hash,
+                signer_image_hashes: HashMap::from([
+                    (nitro_signer.address(), B256::repeat_byte(0x99)),
+                    (tdx_signer.address(), request.image_hash),
+                ]),
+                failing_call: Some(failing_call),
+                failing_signer: None,
+            },
+            Arc::clone(&readiness),
+        );
+
+        let result =
+            pipeline.validate_and_submit(&proof, SUBMIT_BLOCK_INTERVAL, Address::ZERO).await;
+
+        assert!(matches!(&result, Err(SubmitAction::Discard(_))));
+        assert!(!readiness.load(Ordering::SeqCst));
+        assert!(result.unwrap_err().to_string().contains("invalid on-chain"));
+    }
+
+    #[test]
+    fn readiness_fails_after_unavailable_or_stale_dual_proof_cycle() {
+        let readiness = Arc::new(AtomicBool::new(true));
+        let pipeline = registry_pipeline(
+            MockRegistryL1 {
+                latest_block_number: TEST_L1_BLOCK_NUMBER,
+                expected_image_hash: B256::repeat_byte(0x55),
+                signer_image_hashes: HashMap::new(),
+                failing_call: None,
+                failing_signer: None,
+            },
+            Arc::clone(&readiness),
+        );
+        let mut state = PipelineState::new();
+
+        pipeline.handle_proof_result(
+            Ok((
+                SUBMIT_BLOCK_INTERVAL,
+                Err(TeeProofError::Platform {
+                    platform: TeeProofPlatform::Tdx,
+                    error: ProposerError::Prover("tdx prover unavailable".into()),
+                }),
+            )),
+            &mut state,
+        );
+
+        assert!(!readiness.load(Ordering::SeqCst));
+
+        readiness.store(true, Ordering::SeqCst);
+        pipeline.handle_proof_result(
+            Ok((
+                SUBMIT_BLOCK_INTERVAL,
+                Err(TeeProofError::PayloadMismatch {
+                    error: ProposerError::Prover("nitro and tdx proofs do not match".into()),
+                }),
+            )),
+            &mut state,
+        );
+
+        assert!(!readiness.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn readiness_waits_for_signer_validation_after_dual_proof_completion() {
+        let readiness = Arc::new(AtomicBool::new(false));
+        let pipeline = registry_pipeline(
+            MockRegistryL1 {
+                latest_block_number: TEST_L1_BLOCK_NUMBER,
+                expected_image_hash: B256::repeat_byte(0x55),
+                signer_image_hashes: HashMap::new(),
+                failing_call: None,
+                failing_signer: None,
+            },
+            Arc::clone(&readiness),
+        );
+        let mut state = PipelineState::new();
+
+        pipeline.handle_proof_result(
+            Ok((SUBMIT_BLOCK_INTERVAL, Ok(dual_proof_result(SUBMIT_BLOCK_INTERVAL)))),
+            &mut state,
+        );
+
+        assert!(!readiness.load(Ordering::SeqCst));
+        assert!(state.proved.contains_key(&SUBMIT_BLOCK_INTERVAL));
+    }
+
+    #[tokio::test]
+    async fn readiness_fails_after_root_mismatch_submission() {
+        let readiness = Arc::new(AtomicBool::new(true));
+        let pipeline = registry_pipeline(
+            MockRegistryL1 {
+                latest_block_number: TEST_L1_BLOCK_NUMBER,
+                expected_image_hash: B256::repeat_byte(0x55),
+                signer_image_hashes: HashMap::new(),
+                failing_call: None,
+                failing_signer: None,
+            },
+            Arc::clone(&readiness),
+        );
+        let mut state = PipelineState::new();
+
+        let chain_next = pipeline
+            .handle_submit_result(
+                Ok(SubmitOutcome::RootMismatch { target_block: SUBMIT_BLOCK_INTERVAL }),
+                &mut state,
+            )
+            .await;
+
+        assert!(!chain_next);
+        assert!(!readiness.load(Ordering::SeqCst));
+    }
+
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_validate_and_submit_intermediate_roots_match() {
         // MockRollupClient returns B256::repeat_byte(n) for blocks without
         // explicit entries, which matches test_proposal(n).
         let pipeline = submit_pipeline(HashMap::new());
-        let proof_result = submit_proof_result(SUBMIT_BLOCK_INTERVAL);
+        let proof_result = dual_proof_result(SUBMIT_BLOCK_INTERVAL);
 
         let result =
             pipeline.validate_and_submit(&proof_result, SUBMIT_BLOCK_INTERVAL, Address::ZERO).await;
@@ -2138,7 +2997,7 @@ mod tests {
     ) {
         let output_roots = HashMap::from([(mismatch_block, B256::repeat_byte(0xFF))]);
         let pipeline = submit_pipeline(output_roots);
-        let proof_result = submit_proof_result(SUBMIT_BLOCK_INTERVAL);
+        let proof_result = dual_proof_result(SUBMIT_BLOCK_INTERVAL);
 
         let result =
             pipeline.validate_and_submit(&proof_result, SUBMIT_BLOCK_INTERVAL, Address::ZERO).await;

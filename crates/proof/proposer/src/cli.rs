@@ -59,9 +59,17 @@ pub struct ProposerArgs {
     )]
     pub allow_non_finalized: bool,
 
-    /// URL of the prover RPC endpoint.
+    /// Backwards-compatible Nitro prover RPC endpoint alias.
     #[arg(long = "prover-rpc", env = cli_env!("PROVER_RPC"))]
-    pub prover_rpc: Url,
+    pub prover_rpc: Option<Url>,
+
+    /// URL of the AWS Nitro Enclave prover RPC endpoint.
+    #[arg(long = "nitro-prover-rpc", env = cli_env!("NITRO_PROVER_RPC"))]
+    pub nitro_prover_rpc: Option<Url>,
+
+    /// URL of the Intel TDX prover RPC endpoint.
+    #[arg(long = "tdx-prover-rpc", env = cli_env!("TDX_PROVER_RPC"))]
+    pub tdx_prover_rpc: Url,
 
     /// URL of the L1 Ethereum RPC endpoint.
     #[arg(long = "l1-eth-rpc", env = cli_env!("L1_ETH_RPC"))]
@@ -235,8 +243,10 @@ mod tests {
         // Test that we can construct minimal CLI args (requires all required fields)
         let args = vec![
             "proposer",
-            "--prover-rpc",
+            "--nitro-prover-rpc",
             "http://localhost:8080",
+            "--tdx-prover-rpc",
+            "http://localhost:8081",
             "--l1-eth-rpc",
             "http://localhost:8545",
             "--l2-eth-rpc",
@@ -257,6 +267,8 @@ mod tests {
         // Check defaults
         assert!(!cli.proposer.dry_run);
         assert!(!cli.proposer.allow_non_finalized);
+        assert_eq!(cli.proposer.nitro_prover_rpc.unwrap().as_str(), "http://localhost:8080/");
+        assert_eq!(cli.proposer.tdx_prover_rpc.as_str(), "http://localhost:8081/");
         assert_eq!(cli.proposer.poll_interval, Duration::from_secs(12));
         assert_eq!(cli.proposer.rpc_timeout, Duration::from_secs(30));
         assert_eq!(cli.proposer.rollup_rpc.as_str(), "http://localhost:7545/");
@@ -300,8 +312,10 @@ mod tests {
     fn test_cli_missing_rollup_rpc() {
         let args = vec![
             "proposer",
-            "--prover-rpc",
+            "--nitro-prover-rpc",
             "http://localhost:8080",
+            "--tdx-prover-rpc",
+            "http://localhost:8081",
             "--l1-eth-rpc",
             "http://localhost:8545",
             "--l2-eth-rpc",

@@ -32,6 +32,12 @@ pub enum ConfigError {
     /// Invalid signing configuration.
     #[error("invalid signing config: {0}")]
     Signing(base_tx_manager::ConfigError),
+    /// A required CLI field was not configured.
+    #[error("{field} is required")]
+    MissingRequired {
+        /// The field name that is required.
+        field: &'static str,
+    },
     /// Invalid transaction manager configuration.
     #[error("invalid tx manager config: {0}")]
     TxManager(base_tx_manager::ConfigError),
@@ -44,8 +50,10 @@ pub struct ProposerConfig {
     pub dry_run: bool,
     /// Allow proposals based on non-finalized L1 data.
     pub allow_non_finalized: bool,
-    /// URL of the prover RPC endpoint.
-    pub prover_rpc: Url,
+    /// URL of the AWS Nitro Enclave prover RPC endpoint.
+    pub nitro_prover_rpc: Url,
+    /// URL of the Intel TDX prover RPC endpoint.
+    pub tdx_prover_rpc: Url,
     /// URL of the L1 Ethereum RPC endpoint.
     pub l1_eth_rpc: Url,
     /// URL of the L2 Ethereum RPC endpoint.
@@ -97,7 +105,12 @@ impl ProposerConfig {
     pub fn from_cli(cli: Cli) -> Result<Self, ConfigError> {
         let Cli { proposer, logging, metrics, health, admin } = cli;
 
-        validate_url(&proposer.prover_rpc, "prover-rpc")?;
+        let nitro_prover_rpc =
+            proposer.nitro_prover_rpc.clone().or_else(|| proposer.prover_rpc.clone()).ok_or(
+                ConfigError::MissingRequired { field: "nitro-prover-rpc (or legacy prover-rpc)" },
+            )?;
+        validate_url(&nitro_prover_rpc, "nitro-prover-rpc")?;
+        validate_url(&proposer.tdx_prover_rpc, "tdx-prover-rpc")?;
         validate_url(&proposer.l1_eth_rpc, "l1-eth-rpc")?;
         validate_url(&proposer.l2_eth_rpc, "l2-eth-rpc")?;
         validate_url(&proposer.rollup_rpc, "rollup-rpc")?;
@@ -175,7 +188,8 @@ impl ProposerConfig {
         Ok(Self {
             dry_run: proposer.dry_run,
             allow_non_finalized: proposer.allow_non_finalized,
-            prover_rpc: proposer.prover_rpc,
+            nitro_prover_rpc,
+            tdx_prover_rpc: proposer.tdx_prover_rpc,
             l1_eth_rpc: proposer.l1_eth_rpc,
             l2_eth_rpc: proposer.l2_eth_rpc,
             anchor_state_registry_addr: proposer.anchor_state_registry_addr,
@@ -236,7 +250,9 @@ mod tests {
             proposer: ProposerArgs {
                 dry_run: false,
                 allow_non_finalized: false,
-                prover_rpc: Url::parse("http://localhost:8080").unwrap(),
+                prover_rpc: None,
+                nitro_prover_rpc: Some(Url::parse("http://localhost:8080").unwrap()),
+                tdx_prover_rpc: Url::parse("http://localhost:8081").unwrap(),
                 l1_eth_rpc: Url::parse("http://localhost:8545").unwrap(),
                 l2_eth_rpc: Url::parse("http://localhost:9545").unwrap(),
                 anchor_state_registry_addr: "0x1234567890123456789012345678901234567890"
@@ -290,10 +306,21 @@ mod tests {
         let config = ProposerConfig::from_cli(cli).unwrap();
         assert!(!config.dry_run);
         assert!(!config.allow_non_finalized);
+        assert_eq!(config.nitro_prover_rpc.as_str(), "http://localhost:8080/");
+        assert_eq!(config.tdx_prover_rpc.as_str(), "http://localhost:8081/");
         assert_eq!(config.game_type, 1);
         assert_eq!(config.poll_interval, Duration::from_secs(12));
         assert_eq!(config.rpc_timeout, Duration::from_secs(30));
         assert_eq!(config.max_parallel_proofs, 1);
+    }
+
+    #[test]
+    fn test_legacy_prover_rpc_used_as_nitro_alias() {
+        let mut cli = minimal_cli();
+        cli.proposer.prover_rpc = Some(Url::parse("http://localhost:9090").unwrap());
+        cli.proposer.nitro_prover_rpc = None;
+        let config = ProposerConfig::from_cli(cli).unwrap();
+        assert_eq!(config.nitro_prover_rpc.as_str(), "http://localhost:9090/");
     }
 
     #[test]
