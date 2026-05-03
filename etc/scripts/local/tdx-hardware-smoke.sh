@@ -17,7 +17,6 @@
 #
 # Optional environment:
 #   TDX_PROVING_MODE               direct|risc-zero|boundless (default: risc-zero).
-#   TDX_ZK_COPROCESSOR             risc-zero|succinct (default: risc-zero).
 #   EXTRA_REGISTRAR_ARGS           Additional registrar flags, for example Boundless args.
 #   SMOKE_TIMEOUT_SECS             Time to wait for isValidSigner=true (default: 1800).
 #   POLL_INTERVAL_SECS             Registry polling interval (default: 10).
@@ -42,7 +41,6 @@ require_env REGISTRAR_PRIVATE_KEY
 require_env NITRO_REGISTRAR_ARGS
 
 TDX_PROVING_MODE="${TDX_PROVING_MODE:-risc-zero}"
-TDX_ZK_COPROCESSOR="${TDX_ZK_COPROCESSOR:-risc-zero}"
 SMOKE_TIMEOUT_SECS="${SMOKE_TIMEOUT_SECS:-1800}"
 POLL_INTERVAL_SECS="${POLL_INTERVAL_SECS:-10}"
 
@@ -100,7 +98,6 @@ REGISTRAR_ARGS=(
     --tdx-discovery-mode static
     --tdx-prover-endpoint "$TDX_PROVER_ENDPOINT"
     --tdx-proving-mode "$TDX_PROVING_MODE"
-    --tdx-zk-coprocessor "$TDX_ZK_COPROCESSOR"
     --poll-interval-secs "$POLL_INTERVAL_SECS"
 )
 if [ "$TDX_PROVING_MODE" = "risc-zero" ]; then

@@ -12,9 +12,6 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-# Contracts
-base-proof-contracts.workspace = true
-
 # Types / traits
 async-trait.workspace = true
 alloy-primitives.workspace = true

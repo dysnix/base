@@ -697,10 +697,9 @@ where
                 }
                 .abi_encode(),
             ),
-            TeeAttestationKind::Tdx { zk_coprocessor } => Bytes::from(
+            TeeAttestationKind::Tdx => Bytes::from(
                 ITDXTEEProverRegistry::registerTDXSignerCall {
                     output: proof.output,
-                    zkCoprocessor: zk_coprocessor,
                     proofBytes: proof.proof_bytes,
                 }
                 .abi_encode(),
@@ -1155,7 +1154,7 @@ mod tests {
     use alloy_rpc_types_eth::TransactionReceipt;
     use alloy_sol_types::SolCall;
     use async_trait::async_trait;
-    use base_proof_contracts::{TDXTcbStatus, ZkCoProcessorType};
+    use base_proof_contracts::TDXTcbStatus;
     use base_proof_tee_attestation::{Result as TeeAttestationResult, TeeAttestationProof};
     use base_proof_tee_tdx_attestation_prover::TdxAttestationProverInput;
     use base_proof_tee_tdx_verifier::{
@@ -1408,7 +1407,7 @@ mod tests {
             _signer_address: Address,
         ) -> TeeAttestationResult<TeeAttestationProof> {
             Ok(TeeAttestationProof {
-                kind: TeeAttestationKind::Tdx { zk_coprocessor: ZkCoProcessorType::RiscZero },
+                kind: TeeAttestationKind::Tdx,
                 output: Bytes::from_static(b"tdx-output"),
                 proof_bytes: Bytes::from_static(b"tdx-proof"),
             })

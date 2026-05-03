@@ -41,7 +41,7 @@ impl SignerAttestationKind {
     pub const fn matches_proof_kind(&self, proof_kind: &TeeAttestationKind) -> bool {
         matches!(
             (self, proof_kind),
-            (Self::Nitro, TeeAttestationKind::Nitro) | (Self::Tdx, TeeAttestationKind::Tdx { .. })
+            (Self::Nitro, TeeAttestationKind::Nitro) | (Self::Tdx, TeeAttestationKind::Tdx)
         )
     }
 }

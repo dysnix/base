@@ -4,14 +4,13 @@ use std::{fmt, sync::Arc};
 
 use alloy_primitives::{Address, Bytes};
 use async_trait::async_trait;
-use base_proof_contracts::ZkCoProcessorType;
 use base_proof_tee_attestation::{
     TeeAttestationKind, TeeAttestationProof, TeeAttestationProofProvider,
 };
 use base_proof_tee_tdx_verifier::TdxVerifierInput;
 use risc0_zkvm::{ExecutorEnv, ProverOpts, compute_image_id, default_prover};
 
-use crate::{DirectProver, ProverError, Result, TdxAttestationProverInput};
+use crate::{ProverError, Result, TdxAttestationProverInput};
 
 /// Attestation prover using the RISC Zero default prover.
 pub struct RiscZeroProver {
@@ -60,7 +59,7 @@ impl RiscZeroProver {
         .map_err(|e| ProverError::Risc0(format!("proving task panicked: {e}")))??;
 
         Ok(TeeAttestationProof {
-            kind: TeeAttestationKind::Tdx { zk_coprocessor: ZkCoProcessorType::RiscZero },
+            kind: TeeAttestationKind::Tdx,
             output: Bytes::from(journal_bytes),
             proof_bytes: Bytes::from(seal),
         })
@@ -98,7 +97,6 @@ impl TeeAttestationProofProvider for RiscZeroProver {
         attestation_bytes: &[u8],
         signer_address: Address,
     ) -> base_proof_tee_attestation::Result<TeeAttestationProof> {
-        DirectProver::validate_zk_coprocessor(ZkCoProcessorType::RiscZero)?;
         let input = Self::decode_input_for_signer(attestation_bytes, signer_address)?;
         Ok(self.generate_proof(input.verifier_input()).await?)
     }

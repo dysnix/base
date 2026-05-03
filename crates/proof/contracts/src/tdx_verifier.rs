@@ -142,7 +142,6 @@ sol! {
         /// Registers a signer using a ZK proof of Intel TDX DCAP quote verification.
         function registerTDXSigner(
             bytes calldata output,
-            ZkCoProcessorType zkCoprocessor,
             bytes calldata proofBytes
         )
             external;
@@ -166,11 +165,6 @@ mod tests {
         "internalType": "bytes",
         "name": "output",
         "type": "bytes"
-      },
-      {
-        "internalType": "enum ZkCoProcessorType",
-        "name": "zkCoprocessor",
-        "type": "uint8"
       },
       {
         "internalType": "bytes",
@@ -287,7 +281,7 @@ mod tests {
             format!("{}({})", function["name"].as_str().unwrap(), input_types.join(","));
         let selector = &keccak256(signature.as_bytes())[..4];
 
-        assert_eq!(signature, "registerTDXSigner(bytes,uint8,bytes)");
+        assert_eq!(signature, "registerTDXSigner(bytes,bytes)");
         assert_eq!(selector, ITDXTEEProverRegistry::registerTDXSignerCall::SELECTOR);
     }
 
@@ -295,12 +289,11 @@ mod tests {
     fn register_tdx_signer_abi_encodes_correctly() {
         let call = ITDXTEEProverRegistry::registerTDXSignerCall {
             output: Bytes::new(),
-            zkCoprocessor: ZkCoProcessorType::RiscZero,
             proofBytes: Bytes::new(),
         };
         let encoded = call.abi_encode();
 
-        assert_eq!(encoded.len(), 164);
+        assert_eq!(encoded.len(), 132);
         assert_eq!(&encoded[..4], &ITDXTEEProverRegistry::registerTDXSignerCall::SELECTOR);
     }
 

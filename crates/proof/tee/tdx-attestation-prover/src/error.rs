@@ -19,9 +19,6 @@ pub enum ProverError {
         /// Signer committed by the TDX verifier input.
         actual: alloy_primitives::Address,
     },
-    /// The configured ZK coprocessor is not supported by this prover.
-    #[error("unsupported zk coprocessor: {0}")]
-    UnsupportedZkCoprocessor(u8),
     /// RISC Zero proving failed.
     #[error("risc0 error: {0}")]
     Risc0(String),

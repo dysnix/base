@@ -4,7 +4,6 @@ use std::{error::Error, fmt};
 
 use alloy_primitives::{Address, Bytes};
 use async_trait::async_trait;
-use base_proof_contracts::ZkCoProcessorType;
 
 /// Boxed error type used by platform-neutral attestation providers.
 pub type BoxError = Box<dyn Error + Send + Sync>;
@@ -17,43 +16,22 @@ pub type Result<T, E = BoxError> = std::result::Result<T, E>;
 pub enum TeeAttestationKind {
     /// AWS Nitro Enclave attestation proof.
     Nitro,
-    /// Intel TDX attestation proof, including the ZK coprocessor selected
-    /// by the verifier contract.
-    Tdx {
-        /// ZK coprocessor type used to verify the TDX attestation proof.
-        zk_coprocessor: ZkCoProcessorType,
-    },
+    /// Intel TDX attestation proof.
+    Tdx,
 }
 
 impl fmt::Debug for TeeAttestationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Nitro => f.write_str("Nitro"),
-            Self::Tdx { zk_coprocessor } => f
-                .debug_struct("Tdx")
-                .field(
-                    "zk_coprocessor",
-                    &match *zk_coprocessor as u8 {
-                        value if value == ZkCoProcessorType::Unknown as u8 => "Unknown",
-                        value if value == ZkCoProcessorType::RiscZero as u8 => "RiscZero",
-                        value if value == ZkCoProcessorType::Succinct as u8 => "Succinct",
-                        _ => "Unrecognized",
-                    },
-                )
-                .finish(),
+            Self::Tdx => f.write_str("Tdx"),
         }
     }
 }
 
 impl PartialEq for TeeAttestationKind {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Nitro, Self::Nitro) => true,
-            (Self::Tdx { zk_coprocessor: lhs }, Self::Tdx { zk_coprocessor: rhs }) => {
-                *lhs as u8 == *rhs as u8
-            }
-            _ => false,
-        }
+        matches!((self, other), (Self::Nitro, Self::Nitro) | (Self::Tdx, Self::Tdx))
     }
 }
 
@@ -109,7 +87,6 @@ mod tests {
 
     use alloy_primitives::Address;
     use async_trait::async_trait;
-    use base_proof_contracts::ZkCoProcessorType;
     use rstest::rstest;
 
     use super::*;
@@ -194,14 +171,10 @@ mod tests {
     }
 
     #[rstest]
-    fn tdx_kind_keeps_zk_coprocessor() {
-        let kind = TeeAttestationKind::Tdx { zk_coprocessor: ZkCoProcessorType::RiscZero };
+    fn tdx_kind_is_distinct() {
+        let kind = TeeAttestationKind::Tdx;
 
-        assert!(matches!(
-            kind,
-            TeeAttestationKind::Tdx { zk_coprocessor }
-                if zk_coprocessor as u8 == ZkCoProcessorType::RiscZero as u8
-        ));
+        assert_eq!(kind, TeeAttestationKind::Tdx);
     }
 
     #[rstest]

@@ -103,7 +103,6 @@ base-proof-tee-registrar \
   --tdx-discovery-mode static \
   --tdx-prover-endpoint "$TDX_PROVER_ENDPOINT" \
   --tdx-proving-mode boundless \
-  --tdx-zk-coprocessor risc-zero \
   --tdx-image-id "$TDX_IMAGE_ID" \
   --tdx-boundless-rpc-url "$TDX_BOUNDLESS_RPC_URL" \
   --tdx-boundless-private-key "$TDX_BOUNDLESS_PRIVATE_KEY" \

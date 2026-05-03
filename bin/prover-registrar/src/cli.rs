@@ -15,7 +15,7 @@ use alloy_signer_local::PrivateKeySigner;
 use base_balance_monitor::BalanceMonitorLayer;
 use base_cli_utils::RuntimeManager;
 use base_health::HealthServer;
-use base_proof_contracts::{TDXTcbStatus, ZkCoProcessorType};
+use base_proof_contracts::TDXTcbStatus;
 use base_proof_tee_attestation::TeeAttestationProofProvider;
 use base_proof_tee_nitro_attestation_prover::{
     BoundlessProver as NitroBoundlessProver, DirectProver as NitroDirectProver,
@@ -294,14 +294,6 @@ struct TdxArgs {
     #[arg(long, env = cli_env!("TDX_PROVING_MODE"))]
     tdx_proving_mode: Option<TdxProvingMode>,
 
-    /// TDX ZK coprocessor accepted by the deployed verifier.
-    #[arg(
-        long,
-        env = cli_env!("TDX_ZK_COPROCESSOR"),
-        default_value = "risc-zero"
-    )]
-    tdx_zk_coprocessor: TdxZkCoprocessor,
-
     /// TDX verifier guest image ID for Boundless mode.
     #[arg(long, env = cli_env!("TDX_IMAGE_ID"))]
     tdx_image_id: Option<String>,
@@ -448,24 +440,6 @@ pub(crate) enum TdxProvingMode {
     Boundless,
 }
 
-/// TDX ZK coprocessor selector.
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub(crate) enum TdxZkCoprocessor {
-    /// RISC Zero zkVM proving system.
-    RiscZero,
-    /// Succinct SP1 proving system.
-    Succinct,
-}
-
-impl From<TdxZkCoprocessor> for ZkCoProcessorType {
-    fn from(value: TdxZkCoprocessor) -> Self {
-        match value {
-            TdxZkCoprocessor::RiscZero => Self::RiscZero,
-            TdxZkCoprocessor::Succinct => Self::Succinct,
-        }
-    }
-}
-
 /// CRL (Certificate Revocation List) checking CLI arguments.
 #[derive(Args)]
 struct CrlArgs {
@@ -595,11 +569,8 @@ fn build_proof_provider(
                 })?;
             Ok(Box::new(prover))
         }
-        PlatformProvingConfig::Tdx(TdxProvingConfig::Direct { zk_coprocessor }) => {
-            let prover = TdxDirectProver::new(*zk_coprocessor).map_err(|e| {
-                RegistrarError::Config(format!("failed to create TDX direct prover: {e}"))
-            })?;
-            Ok(Box::new(prover))
+        PlatformProvingConfig::Tdx(TdxProvingConfig::Direct) => {
+            Ok(Box::new(TdxDirectProver::new()))
         }
         PlatformProvingConfig::Tdx(TdxProvingConfig::RiscZero { elf_path }) => {
             let elf = std::fs::read(elf_path).map_err(|e| {
@@ -872,16 +843,9 @@ impl Cli {
         let mode = self.tdx.tdx_proving_mode.ok_or_else(|| {
             RegistrarError::Config("--tdx-proving-mode is required when TDX is enabled".into())
         })?;
-        let zk_coprocessor = self.tdx.tdx_zk_coprocessor.into();
         match mode {
-            TdxProvingMode::Direct => Ok(TdxProvingConfig::Direct { zk_coprocessor }),
+            TdxProvingMode::Direct => Ok(TdxProvingConfig::Direct),
             TdxProvingMode::RiscZero => {
-                if !matches!(self.tdx.tdx_zk_coprocessor, TdxZkCoprocessor::RiscZero) {
-                    return Err(RegistrarError::Config(
-                        "--tdx-zk-coprocessor must be risc-zero for --tdx-proving-mode risc-zero"
-                            .into(),
-                    ));
-                }
                 let elf_path = self.tdx.tdx_elf_path.clone().ok_or_else(|| {
                     RegistrarError::Config(
                         "--tdx-elf-path is required for TDX RISC Zero proving".into(),
@@ -890,11 +854,6 @@ impl Cli {
                 Ok(TdxProvingConfig::RiscZero { elf_path })
             }
             TdxProvingMode::Boundless => {
-                if !matches!(self.tdx.tdx_zk_coprocessor, TdxZkCoprocessor::RiscZero) {
-                    return Err(RegistrarError::Config(
-                        "--tdx-zk-coprocessor must be risc-zero for TDX Boundless proving".into(),
-                    ));
-                }
                 if self.tdx.tdx_boundless_timeout_secs == 0 {
                     return Err(RegistrarError::Config(
                         "--tdx-boundless-timeout-secs must be greater than 0".into(),
@@ -1000,7 +959,7 @@ impl Cli {
                         );
                     }
                     PlatformProvingConfig::Nitro(ProvingConfig::Direct { .. })
-                    | PlatformProvingConfig::Tdx(TdxProvingConfig::Direct { .. })
+                    | PlatformProvingConfig::Tdx(TdxProvingConfig::Direct)
                     | PlatformProvingConfig::Tdx(TdxProvingConfig::RiscZero { .. }) => {}
                 }
             }
@@ -1262,8 +1221,6 @@ mod tests {
             TEST_TDX_ENDPOINT,
             "--tdx-proving-mode",
             "direct",
-            "--tdx-zk-coprocessor",
-            "risc-zero",
         ]);
 
         let config = Cli::parse_from(args).into_config().unwrap();
@@ -1275,7 +1232,7 @@ mod tests {
         assert_eq!(static_config.endpoints, vec![Url::parse(TEST_TDX_ENDPOINT).unwrap()]);
         assert!(matches!(
             tdx_fleet(&config).proving,
-            PlatformProvingConfig::Tdx(TdxProvingConfig::Direct { .. })
+            PlatformProvingConfig::Tdx(TdxProvingConfig::Direct)
         ));
     }
 
@@ -1371,25 +1328,16 @@ mod tests {
     }
 
     #[rstest]
-    fn tdx_sp1_direct_config_parses() {
+    fn tdx_direct_config_parses_without_coprocessor_flag() {
         let mut args = boundless_args();
-        args.extend([
-            "--tdx-prover-endpoint",
-            TEST_TDX_ENDPOINT,
-            "--tdx-proving-mode",
-            "direct",
-            "--tdx-zk-coprocessor",
-            "succinct",
-        ]);
+        args.extend(["--tdx-prover-endpoint", TEST_TDX_ENDPOINT, "--tdx-proving-mode", "direct"]);
 
         let config = Cli::parse_from(args).into_config().unwrap();
 
-        let PlatformProvingConfig::Tdx(TdxProvingConfig::Direct { zk_coprocessor }) =
-            &tdx_fleet(&config).proving
-        else {
-            panic!("expected TDX direct proving");
-        };
-        assert_eq!(*zk_coprocessor as u8, ZkCoProcessorType::Succinct as u8);
+        assert!(matches!(
+            &tdx_fleet(&config).proving,
+            PlatformProvingConfig::Tdx(TdxProvingConfig::Direct)
+        ));
     }
 
     #[rstest]
@@ -1514,7 +1462,6 @@ mod tests {
             "--tdx-target-group-arn",
             "--tdx-prover-endpoint",
             "--tdx-proving-mode",
-            "--tdx-zk-coprocessor",
             "--tdx-pcs-tdx-base-url",
             "--tdx-trusted-root-ca-hash",
             "--tdx-allowed-tcb-status",

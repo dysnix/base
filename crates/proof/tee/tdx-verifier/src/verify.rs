@@ -231,7 +231,7 @@ impl TdxVerifier {
 mod tests {
     use alloy_primitives::{Address, B256, Bytes, keccak256};
     use alloy_sol_types::{SolCall, SolValue};
-    use base_proof_contracts::{ITDXTEEProverRegistry, TDXVerifierJournal, ZkCoProcessorType};
+    use base_proof_contracts::{ITDXTEEProverRegistry, TDXVerifierJournal};
     use p256::ecdsa::{Signature, SigningKey, signature::Signer};
     use rstest::rstest;
     use sha2::{Digest, Sha256};
@@ -1056,7 +1056,6 @@ mod tests {
 
         let calldata = ITDXTEEProverRegistry::registerTDXSignerCall {
             output: output.clone(),
-            zkCoprocessor: ZkCoProcessorType::RiscZero,
             proofBytes: proof_bytes.clone(),
         }
         .abi_encode();
@@ -1065,7 +1064,6 @@ mod tests {
         let decoded = ITDXTEEProverRegistry::registerTDXSignerCall::abi_decode(&calldata)
             .expect("TDX registration calldata must decode");
         assert_eq!(decoded.output, output);
-        assert_eq!(decoded.zkCoprocessor as u8, ZkCoProcessorType::RiscZero as u8);
         assert_eq!(decoded.proofBytes, proof_bytes);
 
         let decoded_journal =

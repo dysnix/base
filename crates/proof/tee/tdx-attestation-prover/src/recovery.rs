@@ -62,7 +62,7 @@ impl RecoveredProofPolicy {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{Address, B256, Bytes};
-    use base_proof_contracts::{TDXTcbStatus, TDXVerificationResult, ZkCoProcessorType};
+    use base_proof_contracts::{TDXTcbStatus, TDXVerificationResult};
     use base_proof_tee_attestation::TeeAttestationKind;
     use rstest::rstest;
 
@@ -88,7 +88,7 @@ mod tests {
             reportDataSuffix: B256::repeat_byte(0x88),
         };
         TeeAttestationProof {
-            kind: TeeAttestationKind::Tdx { zk_coprocessor: ZkCoProcessorType::RiscZero },
+            kind: TeeAttestationKind::Tdx,
             output: Bytes::from(SolValue::abi_encode(&journal)),
             proof_bytes: Bytes::from_static(b"proof"),
         }
@@ -119,7 +119,7 @@ mod tests {
     fn recovered_proof_with_malformed_journal_is_skipped() {
         let policy = RecoveredProofPolicy::new(Duration::from_secs(300));
         let proof = TeeAttestationProof {
-            kind: TeeAttestationKind::Tdx { zk_coprocessor: ZkCoProcessorType::RiscZero },
+            kind: TeeAttestationKind::Tdx,
             output: Bytes::from_static(b"not abi"),
             proof_bytes: Bytes::from_static(b"proof"),
         };

@@ -11,7 +11,7 @@ This plan covers the offchain work needed to support Intel TDX TEE provers with 
 The Solidity path adds:
 
 - `TDXVerifier`, which verifies a RISC Zero or SP1 proof whose public values are an ABI-encoded `TDXVerifierJournal`.
-- `TDXTEEProverRegistry`, which extends `TEEProverRegistry` with `registerTDXSigner(bytes output, ZkCoProcessorType zkCoprocessor, bytes proofBytes)`.
+- `TDXTEEProverRegistry`, which extends `TEEProverRegistry` with `registerTDXSigner(bytes output, bytes proofBytes)`.
 - The existing `TEEVerifier` proposal path remains unchanged. TDX changes signer registration and image-hash derivation, not proposal proof bytes.
 
 The current offchain baseline is Nitro-only:
@@ -32,7 +32,7 @@ Actions:
 - Add `ZkCoProcessorType` and `ZkCoProcessorConfig` to a shared binding module if they stay shared between Nitro and TDX.
 - Add `TDXVerificationResult`, `TDXTcbStatus`, and `TDXVerifierJournal` with enum ordering exactly matching `interfaces/multiproof/tee/ITDXVerifier.sol`.
 - Add `ITDXVerifier` bindings for `verify`, `getZkConfig`, and `allowedTcbStatuses`.
-- Extend or add a registry binding for `TDXTEEProverRegistry.registerTDXSigner(bytes,uint8,bytes)`.
+- Extend or add a registry binding for `TDXTEEProverRegistry.registerTDXSigner(bytes,bytes)`.
 - Keep existing Nitro `ITEEProverRegistry.registerSigner(bytes,bytes)` bindings unchanged.
 
 Success criteria:
@@ -56,7 +56,7 @@ Actions:
 ```rust
 pub enum TeeAttestationKind {
     Nitro,
-    Tdx { zk_coprocessor: ZkCoProcessorType },
+    Tdx,
 }
 
 pub struct TeeAttestationProof {
@@ -191,16 +191,15 @@ Actions:
   - Calls `base-proof-tee-tdx-verifier`.
   - Commits the ABI-encoded `TDXVerifierJournal` as public output.
 - Add a direct prover path for local/dev mode.
-- Add a production RISC Zero prover path first, reusing the existing Boundless-style flow where possible.
-- Treat SP1 support as a follow-up implementation unless launch configuration explicitly selects `ZkCoProcessorType.Succinct` before this step starts.
-- Return `TeeAttestationProof { kind: TeeAttestationKind::Tdx { zk_coprocessor }, output, proof_bytes }`.
+- Add a production RISC Zero prover path, reusing the existing Boundless-style flow where possible.
+- Return `TeeAttestationProof { kind: TeeAttestationKind::Tdx, output, proof_bytes }`.
 - Add recovery logic equivalent to the Nitro Boundless provider if the proving backend has long-running requests.
 
 Success criteria:
 
 - Dev-mode proving returns a proof and ABI-encoded `TDXVerifierJournal`.
-- The returned proof kind includes the exact `ZkCoProcessorType` that the deployed `TDXVerifier` is configured to accept.
-- A local Solidity test or Anvil script accepts the generated `(output, zkCoprocessor, proofBytes)` against a mock or real verifier configured with the same verifier ID.
+- The returned proof kind is TDX, and the registry selects RISC Zero internally for verification.
+- A local Solidity test or Anvil script accepts the generated `(output, proofBytes)` against a mock or real verifier configured with the same verifier ID.
 - Recovered in-flight proofs are skipped if their quote timestamp is too old for the verifier's `maxTimeDiff`.
 - `cargo test -p base-proof-tee-tdx-attestation-prover` passes without requiring TDX hardware.
 
@@ -223,12 +222,12 @@ Actions:
   - `--tdx-prover-endpoint` repeatable for static mode.
 - Build separate attestation proof providers keyed by `SignerAttestationKind`:
   - Nitro provider uses the existing Nitro verifier guest and current Boundless/direct settings.
-  - TDX provider uses the TDX verifier guest, `--tdx-zk-coprocessor risc-zero|succinct`, verifier image ID/program ID, collateral fetch/config source, and maximum recovered quote age.
+  - TDX provider uses the TDX verifier guest, verifier image ID/program ID, collateral fetch/config source, and maximum recovered quote age.
 - Rename generic prover-program arguments only if the old Nitro names can remain backwards-compatible; otherwise add platform-prefixed arguments and treat the old names as Nitro aliases.
 - Refactor the registrar driver to process a list of `ProverFleet`/`PlatformRegistrationConfig` values in each poll cycle instead of a single discovery/proof-provider pair.
 - Validate `enclave_attestationKind` against the configured fleet before proving. A Nitro endpoint discovered through TDX config, or a TDX endpoint discovered through Nitro config, is a configuration error for that endpoint and must not be registered.
 - When `TeeAttestationKind::Nitro`, submit `registerSigner(output, proofBytes)`.
-- When `TeeAttestationKind::Tdx`, submit `registerTDXSigner(output, zkCoprocessor, proofBytes)`.
+- When `TeeAttestationKind::Tdx`, submit `registerTDXSigner(output, proofBytes)`.
 - Run Nitro CRL revocation checks only for the Nitro fleet. TDX collateral and revocation checks must be proven in the TDX verifier guest and represented in `TDXVerifierJournal`.
 - Compute orphan deregistration from the union of reachable Nitro and TDX signers, not from each fleet independently, so a signer is only deregistered when it is absent from every configured healthy prover fleet.
 - Track health and metrics per platform, and expose an aggregate readiness signal that fails when either required fleet is missing or unreachable beyond the configured threshold.
@@ -379,7 +378,7 @@ Success criteria:
 These decisions must be closed before starting implementation steps 3-8. If a decision is not closed, the default listed here is the implementation target for the first pass.
 
 - Quote collection ABI. Default: Linux TSM/configfs provider first, DCAP/QGS FFI provider only if the target kernels require it.
-- ZK coprocessor. Default: RISC Zero first, SP1 after RISC Zero unless launch requires `ZkCoProcessorType.Succinct`.
+- Registry registration coprocessor. The registry now selects RISC Zero internally for TDX signer registration.
 - Signer key lifecycle. Default: ephemeral signer keys matching the current Nitro behavior; sealed or KMS-backed keys require an explicit follow-up design.
 - Accepted TCB statuses. Default: `UpToDate` only for first pass; add other statuses only with a deployment policy decision.
 - Discovery backend. Default: static endpoint discovery for TDX plus existing AWS target group discovery for Nitro.

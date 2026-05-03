@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use alloy_primitives::{Address, B256, b256};
 use alloy_signer_local::PrivateKeySigner;
-use base_proof_contracts::{TDXTcbStatus, ZkCoProcessorType};
+use base_proof_contracts::TDXTcbStatus;
 use base_tx_manager::{SignerConfig, TxManagerConfig};
 use url::Url;
 
@@ -118,10 +118,7 @@ pub enum ProvingConfig {
 #[derive(Clone)]
 pub enum TdxProvingConfig {
     /// Native direct verification for local development and mock contracts.
-    Direct {
-        /// ZK coprocessor enum passed to `registerTDXSigner`.
-        zk_coprocessor: ZkCoProcessorType,
-    },
+    Direct,
     /// RISC Zero proving via `risc0_zkvm::default_prover()`.
     RiscZero {
         /// Path to the TDX verifier guest ELF binary on disk.
@@ -134,9 +131,7 @@ pub enum TdxProvingConfig {
 impl std::fmt::Debug for TdxProvingConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Direct { zk_coprocessor } => {
-                f.debug_struct("Direct").field("zk_coprocessor", &(*zk_coprocessor as u8)).finish()
-            }
+            Self::Direct => f.write_str("Direct"),
             Self::RiscZero { elf_path } => {
                 f.debug_struct("RiscZero").field("elf_path", elf_path).finish()
             }

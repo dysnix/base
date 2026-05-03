@@ -16,8 +16,7 @@ import { GameType } from "src/dispute/lib/Types.sol";
 import { TDXVerifier } from "src/multiproof/tee/TDXVerifier.sol";
 
 interface ITDXEndToEndRegistry {
-    function registerTDXSigner(bytes calldata output, ZkCoProcessorType zkCoprocessor, bytes calldata proofBytes)
-        external;
+    function registerTDXSigner(bytes calldata output, bytes calldata proofBytes) external;
 
     function isRegisteredSigner(address signer) external view returns (bool);
 
@@ -104,7 +103,7 @@ contract TDXEndToEndRegistrationTest is Test {
         _mockRiscZeroVerify(output, proofBytes);
 
         vm.prank(address(0xdEaD));
-        registry.registerTDXSigner(output, ZkCoProcessorType.RiscZero, proofBytes);
+        registry.registerTDXSigner(output, proofBytes);
 
         assertTrue(registry.isRegisteredSigner(journal.signer));
         assertEq(registry.signerImageHash(journal.signer), IMAGE_HASH);

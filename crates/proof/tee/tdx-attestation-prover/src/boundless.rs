@@ -6,7 +6,7 @@ use alloy_primitives::{Address, B256, Bytes, keccak256};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::SolValue;
 use async_trait::async_trait;
-use base_proof_contracts::{TDXVerifierJournal, ZkCoProcessorType};
+use base_proof_contracts::TDXVerifierJournal;
 use base_proof_tee_attestation::{
     TeeAttestationKind, TeeAttestationProof, TeeAttestationProofProvider,
 };
@@ -196,7 +196,7 @@ impl BoundlessProver {
         })?;
 
         Ok(TeeAttestationProof {
-            kind: TeeAttestationKind::Tdx { zk_coprocessor: ZkCoProcessorType::RiscZero },
+            kind: TeeAttestationKind::Tdx,
             output: journal,
             proof_bytes: Bytes::from(encoded_seal),
         })
@@ -487,7 +487,7 @@ mod tests {
             reportDataSuffix: B256::repeat_byte(0x88),
         };
         TeeAttestationProof {
-            kind: TeeAttestationKind::Tdx { zk_coprocessor: ZkCoProcessorType::RiscZero },
+            kind: TeeAttestationKind::Tdx,
             output: Bytes::from(SolValue::abi_encode(&journal)),
             proof_bytes: Bytes::from_static(b"proof"),
         }
