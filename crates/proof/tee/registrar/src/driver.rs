@@ -503,29 +503,23 @@ where
             );
         }
 
-        let attestation_kind = match configured_attestation_kind {
-            Some(expected) => {
-                let attestation_kind =
-                    self.signer_client.attestation_kind(&instance.endpoint).await?;
-                if attestation_kind != expected {
-                    return Err(RegistrarError::EndpointAttestationKindMismatch {
-                        instance: instance.endpoint.to_string(),
-                        expected,
-                        actual: attestation_kind,
-                    });
-                }
-                Some(attestation_kind)
-            }
-            None => None,
-        };
-
         // Fetch attestations once for all enclaves before the registration
         // loop. Each signer_attestation RPC may hit hardware on the prover
         // side, so fetching per-enclave would generate N×N attestations for N
         // enclaves. Nitro binds freshness with a registrar nonce; TDX binds
         // freshness through the quote timestamp committed in TDREPORT.REPORTDATA.
-        let attestation_kind = match attestation_kind {
-            Some(attestation_kind) => attestation_kind,
+        let attestation_kind = match configured_attestation_kind {
+            Some(expected) => {
+                let kind = self.signer_client.attestation_kind(&instance.endpoint).await?;
+                if kind != expected {
+                    return Err(RegistrarError::EndpointAttestationKindMismatch {
+                        instance: instance.endpoint.to_string(),
+                        expected,
+                        actual: kind,
+                    });
+                }
+                kind
+            }
             None => self.signer_client.attestation_kind(&instance.endpoint).await?,
         };
         let all_attestations = match attestation_kind {
@@ -582,9 +576,7 @@ where
                     );
                     return Ok(addresses);
                 }
-                Ok(false) => {
-                    // All certs clean, proceed with registration.
-                }
+                Ok(false) => {}
                 Err(e) => {
                     // Fail-open: CRL check errors don't block registration.
                     warn!(
@@ -1225,6 +1217,10 @@ mod tests {
 
     // ── Test helpers ─────────────────────────────────────────────────────
 
+    fn prover_url(host_port: &str) -> Url {
+        Url::parse(&format!("http://{host_port}")).unwrap()
+    }
+
     /// Derives the uncompressed 65-byte public key from a private key.
     fn public_key_from_private(private_key: &[u8; 32]) -> Vec<u8> {
         let signing_key = SigningKey::from_slice(private_key).unwrap();
@@ -1290,7 +1286,7 @@ mod tests {
             Server::builder().build("127.0.0.1:0".parse::<SocketAddr>().unwrap()).await.unwrap();
         let addr = server.local_addr().unwrap();
         let handle = server.start(module);
-        (Url::parse(&format!("http://{addr}")).unwrap(), handle)
+        (prover_url(&addr.to_string()), handle)
     }
 
     /// Builds a minimal `TransactionReceipt` for mock tx managers.
@@ -1325,7 +1321,7 @@ mod tests {
     /// defaults to `None` — use [`instance_with_launch_time`] for tests that
     /// need a specific launch time.
     fn instance(host_port: &str, status: InstanceHealthStatus) -> ProverInstance {
-        let endpoint = Url::parse(&format!("http://{host_port}")).unwrap();
+        let endpoint = prover_url(host_port);
         ProverInstance {
             instance_id: format!("i-{host_port}"),
             endpoint,
@@ -1340,7 +1336,7 @@ mod tests {
         status: InstanceHealthStatus,
         launch_time: Option<SystemTime>,
     ) -> ProverInstance {
-        let endpoint = Url::parse(&format!("http://{host_port}")).unwrap();
+        let endpoint = prover_url(host_port);
         ProverInstance {
             instance_id: format!("i-{host_port}"),
             endpoint,
@@ -1461,7 +1457,7 @@ mod tests {
             let keys = entries
                 .iter()
                 .map(|(ep, pk)| {
-                    let url = Url::parse(&format!("http://{ep}")).unwrap();
+                    let url = prover_url(ep);
                     (url, vec![public_key_from_private(pk)])
                 })
                 .collect();
@@ -1477,7 +1473,7 @@ mod tests {
         /// Creates a mock that returns multiple public keys for a single endpoint,
         /// simulating a multi-enclave instance.
         fn multi_enclave(host_port: &str, private_keys: &[&[u8; 32]]) -> Self {
-            let url = Url::parse(&format!("http://{host_port}")).unwrap();
+            let url = prover_url(host_port);
             let pubs = private_keys.iter().map(|pk| public_key_from_private(pk)).collect();
             Self {
                 keys: HashMap::from([(url, pubs)]),
@@ -1490,21 +1486,21 @@ mod tests {
 
         /// Configures attestation blobs for a given endpoint.
         fn with_attestations(mut self, host_port: &str, attestations: Vec<Vec<u8>>) -> Self {
-            let url = Url::parse(&format!("http://{host_port}")).unwrap();
+            let url = prover_url(host_port);
             self.attestations.insert(url, attestations);
             self
         }
 
         /// Configures the attestation kind for a given endpoint.
         fn with_attestation_kind(mut self, host_port: &str, kind: SignerAttestationKind) -> Self {
-            let url = Url::parse(&format!("http://{host_port}")).unwrap();
+            let url = prover_url(host_port);
             self.attestation_kinds.insert(url, kind);
             self
         }
 
         /// Configures the attestation-kind RPC to fail for a given endpoint.
         fn with_failing_attestation_kind(mut self, host_port: &str) -> Self {
-            let url = Url::parse(&format!("http://{host_port}")).unwrap();
+            let url = prover_url(host_port);
             self.failing_attestation_kinds.insert(url);
             self
         }
