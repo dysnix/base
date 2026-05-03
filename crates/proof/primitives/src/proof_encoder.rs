@@ -16,6 +16,12 @@ pub const PROOF_TYPE_TEE: u8 = 0;
 /// Proof type byte for ZK proofs (matches `AggregateVerifier.ProofType.ZK`).
 pub const PROOF_TYPE_ZK: u8 = 1;
 
+/// Number of platform signatures required by the dual-platform TEE verifier.
+pub const DUAL_TEE_SIGNATURE_COUNT: usize = 2;
+
+/// Combined length of the Nitro and TDX proposal signatures.
+pub const DUAL_TEE_SIGNATURE_LENGTH: usize = ECDSA_SIGNATURE_LENGTH * DUAL_TEE_SIGNATURE_COUNT;
+
 /// Errors that can occur during cryptographic operations.
 #[derive(Debug, Clone, Eq, PartialEq, Error)]
 pub enum CryptoError {
@@ -48,6 +54,26 @@ impl ProofEncoder {
         }
     }
 
+    /// Returns a copy of a 65-byte ECDSA signature with the v-value normalized.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the signature is not exactly 65 bytes or has an invalid v-value.
+    pub fn normalize_signature(
+        signature: &[u8],
+    ) -> Result<[u8; ECDSA_SIGNATURE_LENGTH], CryptoError> {
+        if signature.len() != ECDSA_SIGNATURE_LENGTH {
+            return Err(CryptoError::InvalidSignatureLength(signature.len()));
+        }
+
+        let mut normalized = [0u8; ECDSA_SIGNATURE_LENGTH];
+        normalized.copy_from_slice(signature);
+        normalized[ECDSA_SIGNATURE_LENGTH - 1] =
+            Self::normalize_v(normalized[ECDSA_SIGNATURE_LENGTH - 1])?;
+
+        Ok(normalized)
+    }
+
     /// Encodes a TEE proof into the 130-byte format expected by
     /// `AggregateVerifier.initializeWithInitData()`.
     ///
@@ -63,9 +89,7 @@ impl ProofEncoder {
         l1_origin_hash: B256,
         l1_origin_number: u64,
     ) -> Result<Bytes, CryptoError> {
-        if signature.len() != ECDSA_SIGNATURE_LENGTH {
-            return Err(CryptoError::InvalidSignatureLength(signature.len()));
-        }
+        let signature = Self::normalize_signature(signature)?;
 
         let mut proof_data = vec![0u8; 1 + 32 + 32 + ECDSA_SIGNATURE_LENGTH];
 
@@ -79,8 +103,37 @@ impl ProofEncoder {
         proof_data[33..65].copy_from_slice(&U256::from(l1_origin_number).to_be_bytes::<32>());
 
         // Bytes 65-129: ECDSA signature with v-value adjusted from 0/1 to 27/28
-        proof_data[65..130].copy_from_slice(&signature[..ECDSA_SIGNATURE_LENGTH]);
-        proof_data[129] = Self::normalize_v(proof_data[129])?;
+        proof_data[65..130].copy_from_slice(&signature);
+
+        Ok(Bytes::from(proof_data))
+    }
+
+    /// Encodes a dual-platform TEE proof for `AggregateVerifier.initializeWithInitData()`.
+    ///
+    /// Format:
+    /// `proofType(1) + l1OriginHash(32) + l1OriginNumber(32) + nitroSignature(65) + tdxSignature(65)`
+    ///
+    /// The v-value in each ECDSA signature is adjusted from 0/1 to 27/28 if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either signature is not exactly 65 bytes or has an invalid v-value.
+    pub fn encode_dual_tee_proof_bytes(
+        nitro_signature: &[u8],
+        tdx_signature: &[u8],
+        l1_origin_hash: B256,
+        l1_origin_number: u64,
+    ) -> Result<Bytes, CryptoError> {
+        let nitro_signature = Self::normalize_signature(nitro_signature)?;
+        let tdx_signature = Self::normalize_signature(tdx_signature)?;
+
+        let mut proof_data = vec![0u8; 1 + 32 + 32 + DUAL_TEE_SIGNATURE_LENGTH];
+
+        proof_data[0] = PROOF_TYPE_TEE;
+        proof_data[1..33].copy_from_slice(l1_origin_hash.as_slice());
+        proof_data[33..65].copy_from_slice(&U256::from(l1_origin_number).to_be_bytes::<32>());
+        proof_data[65..130].copy_from_slice(&nitro_signature);
+        proof_data[130..195].copy_from_slice(&tdx_signature);
 
         Ok(Bytes::from(proof_data))
     }
@@ -99,9 +152,7 @@ impl ProofEncoder {
     ///
     /// Returns an error if the signature is not exactly 65 bytes or has an invalid v-value.
     pub fn encode_dispute_proof_bytes(signature: &[u8]) -> Result<Bytes, CryptoError> {
-        if signature.len() != ECDSA_SIGNATURE_LENGTH {
-            return Err(CryptoError::InvalidSignatureLength(signature.len()));
-        }
+        let signature = Self::normalize_signature(signature)?;
 
         let mut proof_data = vec![0u8; 1 + ECDSA_SIGNATURE_LENGTH];
 
@@ -109,8 +160,30 @@ impl ProofEncoder {
         proof_data[0] = PROOF_TYPE_TEE;
 
         // Bytes 1-65: ECDSA signature with v-value adjusted from 0/1 to 27/28
-        proof_data[1..66].copy_from_slice(&signature[..ECDSA_SIGNATURE_LENGTH]);
-        proof_data[65] = Self::normalize_v(proof_data[65])?;
+        proof_data[1..66].copy_from_slice(&signature);
+
+        Ok(Bytes::from(proof_data))
+    }
+
+    /// Encodes a compact dual-platform TEE proof for dispute-game entry points.
+    ///
+    /// Format: `proofType(1) + nitroSignature(65) + tdxSignature(65)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either signature is not exactly 65 bytes or has an invalid v-value.
+    pub fn encode_dual_tee_dispute_proof_bytes(
+        nitro_signature: &[u8],
+        tdx_signature: &[u8],
+    ) -> Result<Bytes, CryptoError> {
+        let nitro_signature = Self::normalize_signature(nitro_signature)?;
+        let tdx_signature = Self::normalize_signature(tdx_signature)?;
+
+        let mut proof_data = vec![0u8; 1 + DUAL_TEE_SIGNATURE_LENGTH];
+
+        proof_data[0] = PROOF_TYPE_TEE;
+        proof_data[1..66].copy_from_slice(&nitro_signature);
+        proof_data[66..131].copy_from_slice(&tdx_signature);
 
         Ok(Bytes::from(proof_data))
     }
@@ -175,6 +248,40 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains(expected_err));
     }
 
+    #[test]
+    fn test_encode_dual_tee_proof_bytes_format() {
+        let nitro_sig = test_signature(0);
+        let tdx_sig = test_signature(1);
+        let proof = ProofEncoder::encode_dual_tee_proof_bytes(
+            &nitro_sig,
+            &tdx_sig,
+            B256::repeat_byte(0xCC),
+            500,
+        )
+        .unwrap();
+
+        assert_eq!(proof.len(), 195);
+        assert_eq!(proof[0], PROOF_TYPE_TEE);
+        assert_eq!(&proof[1..33], B256::repeat_byte(0xCC).as_slice());
+        assert_eq!(&proof[33..65], &U256::from(500u64).to_be_bytes::<32>());
+        assert_eq!(proof[129], 27);
+        assert_eq!(proof[194], 28);
+    }
+
+    #[test]
+    fn test_encode_dual_tee_proof_bytes_preserves_signature_order() {
+        let mut nitro_sig = vec![0xAA; 65];
+        nitro_sig[64] = 27;
+        let mut tdx_sig = vec![0xBB; 65];
+        tdx_sig[64] = 28;
+
+        let proof =
+            ProofEncoder::encode_dual_tee_proof_bytes(&nitro_sig, &tdx_sig, B256::ZERO, 0).unwrap();
+
+        assert_eq!(&proof[65..130], &nitro_sig);
+        assert_eq!(&proof[130..195], &tdx_sig);
+    }
+
     // --- encode_dispute_proof_bytes tests ---
 
     #[test]
@@ -215,5 +322,18 @@ mod tests {
         let result = ProofEncoder::encode_dispute_proof_bytes(&sig);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains(expected_err));
+    }
+
+    #[test]
+    fn test_encode_dual_tee_dispute_proof_bytes_format() {
+        let nitro_sig = test_signature(0);
+        let tdx_sig = test_signature(1);
+        let proof =
+            ProofEncoder::encode_dual_tee_dispute_proof_bytes(&nitro_sig, &tdx_sig).unwrap();
+
+        assert_eq!(proof.len(), 131);
+        assert_eq!(proof[0], PROOF_TYPE_TEE);
+        assert_eq!(proof[65], 27);
+        assert_eq!(proof[130], 28);
     }
 }

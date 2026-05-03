@@ -1397,6 +1397,12 @@ where
             "Proposing output (creating dispute game)"
         );
 
+        let proof_data = proof_result.build_proof_data().map_err(|e| {
+            SubmitAction::Failed(ProposerError::Internal(format!(
+                "failed to build dual-platform proof data: {e}"
+            )))
+        })?;
+
         // Submit with timeout.
         let mut propose_timer = base_metrics::timed!(Metrics::proposal_l1_tx_duration_seconds());
         let propose_result = tokio::time::timeout(
@@ -1405,6 +1411,7 @@ where
                 aggregate_proposal,
                 parent_address,
                 &intermediate_roots,
+                proof_data,
             ),
         )
         .await;
@@ -1607,10 +1614,11 @@ mod tests {
     }
 
     fn dual_proof_result(target_block: u64) -> DualPlatformProof {
-        let proof = submit_proof_result(target_block);
+        let nitro_proof = submit_proof_result(target_block, 0xAA, 0);
+        let tdx_proof = submit_proof_result(target_block, 0xBB, 1);
         DualPlatformProof::new(
-            PlatformProof::new(TeeProofPlatform::Nitro, proof.clone()).unwrap(),
-            PlatformProof::new(TeeProofPlatform::Tdx, proof).unwrap(),
+            PlatformProof::new(TeeProofPlatform::Nitro, nitro_proof).unwrap(),
+            PlatformProof::new(TeeProofPlatform::Tdx, tdx_proof).unwrap(),
         )
         .unwrap()
     }
@@ -2574,9 +2582,12 @@ mod tests {
         )
     }
 
-    fn submit_proof_result(target_block: u64) -> ProofResult {
+    fn submit_proof_result(target_block: u64, signature_fill: u8, signature_v: u8) -> ProofResult {
         let proposals: Vec<Proposal> = (1..=target_block).map(test_proposal).collect();
-        let aggregate = test_proposal(target_block);
+        let mut aggregate = test_proposal(target_block);
+        let mut signature = vec![signature_fill; 65];
+        signature[64] = signature_v;
+        aggregate.signature = Bytes::from(signature);
         ProofResult::Tee { aggregate_proposal: aggregate, proposals }
     }
 
@@ -2680,7 +2691,7 @@ mod tests {
         assert!(calls.contains(&(TeeProofPlatform::Nitro, request.clone())));
         assert!(calls.contains(&(TeeProofPlatform::Tdx, request)));
         let (nitro_aggregate, _) = proof.nitro.proposals();
-        let (tdx_aggregate, _) = proof.tdx.as_ref().unwrap().proposals();
+        let (tdx_aggregate, _) = proof.tdx.proposals();
         assert_ne!(nitro_aggregate.signature, tdx_aggregate.signature);
         assert_eq!(nitro_aggregate.output_root, tdx_aggregate.output_root);
         assert_eq!(nitro_aggregate.l2_block_number, tdx_aggregate.l2_block_number);

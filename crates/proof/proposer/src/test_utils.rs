@@ -419,6 +419,7 @@ impl OutputProposer for MockOutputProposer {
         _proposal: &Proposal,
         _parent_address: Address,
         _intermediate_roots: &[B256],
+        _proof_data: Bytes,
     ) -> Result<(), ProposerError> {
         Ok(())
     }

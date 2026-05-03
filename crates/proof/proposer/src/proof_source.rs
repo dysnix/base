@@ -2,7 +2,10 @@
 
 use std::{error::Error as StdError, fmt, sync::Arc};
 
-use base_proof_primitives::{ProofRequest, ProofResult, Proposal, ProverClient};
+use alloy_primitives::Bytes;
+use base_proof_primitives::{
+    CryptoError, ProofEncoder, ProofRequest, ProofResult, Proposal, ProverClient,
+};
 use futures::future;
 use thiserror::Error;
 
@@ -67,42 +70,61 @@ impl PlatformProof {
 pub struct DualPlatformProof {
     /// Proof returned by the Nitro prover fleet.
     pub nitro: PlatformProof,
-    /// Proof returned by the TDX prover fleet, when configured.
-    pub tdx: Option<PlatformProof>,
+    /// Proof returned by the TDX prover fleet.
+    pub tdx: PlatformProof,
 }
 
 impl DualPlatformProof {
     /// Creates a paired proof after verifying both platforms signed the same proposal data.
     pub fn new(nitro: PlatformProof, tdx: PlatformProof) -> Result<Self, ProposerError> {
-        let proof = Self { nitro, tdx: Some(tdx) };
+        if nitro.platform != TeeProofPlatform::Nitro {
+            return Err(ProposerError::Prover(format!(
+                "expected nitro proof, got {} proof",
+                nitro.platform
+            )));
+        }
+        if tdx.platform != TeeProofPlatform::Tdx {
+            return Err(ProposerError::Prover(format!(
+                "expected tdx proof, got {} proof",
+                tdx.platform
+            )));
+        }
+
+        let proof = Self { nitro, tdx };
         proof.validate_matching_payloads()?;
         Ok(proof)
     }
 
-    /// Creates a Nitro-only proof for legacy deployments without a TDX prover.
-    pub fn new_nitro_only(nitro: PlatformProof) -> Result<Self, ProposerError> {
-        let proof = Self { nitro, tdx: None };
-        proof.validate_matching_payloads()?;
-        Ok(proof)
-    }
-
-    /// Returns the Nitro proof used by the existing single-proof submission path.
+    /// Returns the Nitro proof used for canonical proposal fields and intermediate roots.
     pub const fn submission_proof(&self) -> &PlatformProof {
         &self.nitro
     }
 
     /// Returns every platform proof that was actually sourced.
     pub fn platform_proofs(&self) -> impl Iterator<Item = &PlatformProof> {
-        std::iter::once(&self.nitro).chain(self.tdx.iter())
+        [&self.nitro, &self.tdx].into_iter()
+    }
+
+    /// Builds the proof bytes submitted to `AggregateVerifier.initializeWithInitData()`.
+    ///
+    /// The proof layout is:
+    /// `proofType(1) || l1OriginHash(32) || l1OriginNumber(32) || nitroSignature(65) || tdxSignature(65)`.
+    pub fn build_proof_data(&self) -> Result<Bytes, CryptoError> {
+        let (nitro_aggregate, _) = self.nitro.proposals();
+        let (tdx_aggregate, _) = self.tdx.proposals();
+
+        ProofEncoder::encode_dual_tee_proof_bytes(
+            &nitro_aggregate.signature,
+            &tdx_aggregate.signature,
+            nitro_aggregate.l1_origin_hash,
+            nitro_aggregate.l1_origin_number,
+        )
     }
 
     /// Ensures configured platform proofs are for the same proposal input.
     pub fn validate_matching_payloads(&self) -> Result<(), ProposerError> {
-        let Some(tdx) = &self.tdx else {
-            return Ok(());
-        };
         let (nitro_aggregate, nitro_proposals) = self.nitro.proposals();
-        let (tdx_aggregate, tdx_proposals) = tdx.proposals();
+        let (tdx_aggregate, tdx_proposals) = self.tdx.proposals();
 
         Self::validate_matching_proposal_payload(
             nitro_aggregate,
@@ -177,14 +199,6 @@ pub enum TeeProofError {
         /// Underlying mismatch error.
         error: ProposerError,
     },
-    /// The only configured platform proof request failed.
-    #[error("{platform} prover failed: {error}")]
-    SinglePlatform {
-        /// Configured platform whose proof request failed.
-        platform: TeeProofPlatform,
-        /// Underlying proposer error.
-        error: ProposerError,
-    },
     /// Non-platform-specific proof task failure.
     #[error("{error}")]
     Other {
@@ -203,7 +217,6 @@ impl TeeProofError {
             Self::Platform { platform: TeeProofPlatform::Tdx, .. } => {
                 vec![(TeeProofPlatform::Nitro, true), (TeeProofPlatform::Tdx, false)]
             }
-            Self::SinglePlatform { platform, .. } => vec![(*platform, false)],
             Self::BothPlatforms { .. } | Self::PayloadMismatch { .. } | Self::Other { .. } => {
                 vec![(TeeProofPlatform::Nitro, false), (TeeProofPlatform::Tdx, false)]
             }
@@ -214,7 +227,6 @@ impl TeeProofError {
     pub const fn metric_label(&self) -> &'static str {
         match self {
             Self::Platform { error, .. }
-            | Self::SinglePlatform { error, .. }
             | Self::PayloadMismatch { error }
             | Self::Other { error } => error.metric_label(),
             Self::BothPlatforms { .. } => ProposerError::ERROR_TYPE_PROVER,
@@ -227,38 +239,23 @@ impl TeeProofError {
 pub struct TeeProofSources {
     /// Nitro prover client.
     pub nitro: Arc<dyn ProverClient>,
-    /// TDX prover client, when configured.
-    pub tdx: Option<Arc<dyn ProverClient>>,
+    /// TDX prover client.
+    pub tdx: Arc<dyn ProverClient>,
 }
 
 impl TeeProofSources {
     /// Creates paired proof sources.
     pub const fn new(nitro: Arc<dyn ProverClient>, tdx: Arc<dyn ProverClient>) -> Self {
-        Self { nitro, tdx: Some(tdx) }
-    }
-
-    /// Creates a Nitro-only proof source for legacy deployments.
-    pub const fn new_nitro_only(nitro: Arc<dyn ProverClient>) -> Self {
-        Self { nitro, tdx: None }
+        Self { nitro, tdx }
     }
 
     /// Requests proofs from configured platform fleets for the same request.
     pub async fn prove(&self, request: ProofRequest) -> Result<DualPlatformProof, TeeProofError> {
-        let Some(tdx) = &self.tdx else {
-            let nitro_result = self.nitro.prove(request).await;
-            let nitro =
-                Self::platform_result(TeeProofPlatform::Nitro, nitro_result).map_err(|error| {
-                    TeeProofError::SinglePlatform { platform: TeeProofPlatform::Nitro, error }
-                })?;
-            return DualPlatformProof::new_nitro_only(nitro)
-                .map_err(|error| TeeProofError::PayloadMismatch { error });
-        };
-
         let nitro_request = request.clone();
         let tdx_request = request;
 
         let (nitro_result, tdx_result) =
-            future::join(self.nitro.prove(nitro_request), tdx.prove(tdx_request)).await;
+            future::join(self.nitro.prove(nitro_request), self.tdx.prove(tdx_request)).await;
 
         let nitro = Self::platform_result(TeeProofPlatform::Nitro, nitro_result);
         let tdx = Self::platform_result(TeeProofPlatform::Tdx, tdx_result);
@@ -294,7 +291,9 @@ mod tests {
     };
 
     use alloy_primitives::{Address, B256};
-    use base_proof_primitives::{ProofRequest, ProofResult, ProverClient};
+    use base_proof_primitives::{
+        DUAL_TEE_SIGNATURE_LENGTH, PROOF_TYPE_TEE, ProofRequest, ProofResult, ProverClient,
+    };
 
     use super::*;
     use crate::test_utils::test_proposal;
@@ -347,35 +346,78 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dual_platform_proof_builds_concatenated_submission_proof_data() {
+        let mut nitro_proposal = test_proposal(1);
+        nitro_proposal.signature =
+            Bytes::from([vec![0xAA; 64], vec![0]].into_iter().flatten().collect::<Vec<_>>());
+        let mut tdx_proposal = nitro_proposal.clone();
+        tdx_proposal.signature =
+            Bytes::from([vec![0xBB; 64], vec![1]].into_iter().flatten().collect::<Vec<_>>());
+        let proof = DualPlatformProof::new(
+            PlatformProof::new(
+                TeeProofPlatform::Nitro,
+                ProofResult::Tee {
+                    aggregate_proposal: nitro_proposal.clone(),
+                    proposals: vec![nitro_proposal],
+                },
+            )
+            .unwrap(),
+            PlatformProof::new(
+                TeeProofPlatform::Tdx,
+                ProofResult::Tee {
+                    aggregate_proposal: tdx_proposal.clone(),
+                    proposals: vec![tdx_proposal],
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let proof_data = proof.build_proof_data().unwrap();
+
+        assert_eq!(proof_data.len(), 1 + 32 + 32 + DUAL_TEE_SIGNATURE_LENGTH);
+        assert_eq!(proof_data[0], PROOF_TYPE_TEE);
+        assert_eq!(proof_data[129], 27);
+        assert_eq!(proof_data[194], 28);
+    }
+
     #[tokio::test]
-    async fn nitro_only_source_requests_one_proof() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let nitro: Arc<dyn ProverClient> = Arc::new(CountingProver { calls: Arc::clone(&calls) });
-        let sources = TeeProofSources::new_nitro_only(nitro);
+    async fn dual_sources_request_both_platforms() {
+        let nitro_calls = Arc::new(AtomicUsize::new(0));
+        let tdx_calls = Arc::new(AtomicUsize::new(0));
+        let nitro: Arc<dyn ProverClient> =
+            Arc::new(CountingProver { calls: Arc::clone(&nitro_calls) });
+        let tdx: Arc<dyn ProverClient> = Arc::new(CountingProver { calls: Arc::clone(&tdx_calls) });
+        let sources = TeeProofSources::new(nitro, tdx);
 
         let proof = sources.prove(proof_request()).await.unwrap();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert!(proof.tdx.is_none());
+        assert_eq!(nitro_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(tdx_calls.load(Ordering::SeqCst), 1);
         assert_eq!(
             proof.platform_proofs().map(|proof| proof.platform).collect::<Vec<_>>(),
-            vec![TeeProofPlatform::Nitro]
+            vec![TeeProofPlatform::Nitro, TeeProofPlatform::Tdx]
         );
     }
 
     #[tokio::test]
-    async fn nitro_only_failure_reports_only_nitro_readiness() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let nitro: Arc<dyn ProverClient> = Arc::new(FailingProver { calls: Arc::clone(&calls) });
-        let sources = TeeProofSources::new_nitro_only(nitro);
+    async fn tdx_failure_reports_platform_readiness() {
+        let nitro_calls = Arc::new(AtomicUsize::new(0));
+        let tdx_calls = Arc::new(AtomicUsize::new(0));
+        let nitro: Arc<dyn ProverClient> =
+            Arc::new(CountingProver { calls: Arc::clone(&nitro_calls) });
+        let tdx: Arc<dyn ProverClient> = Arc::new(FailingProver { calls: Arc::clone(&tdx_calls) });
+        let sources = TeeProofSources::new(nitro, tdx);
 
         let error = sources.prove(proof_request()).await.unwrap_err();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert!(matches!(
-            error,
-            TeeProofError::SinglePlatform { platform: TeeProofPlatform::Nitro, .. }
-        ));
-        assert_eq!(error.platform_readiness(), vec![(TeeProofPlatform::Nitro, false)]);
+        assert_eq!(nitro_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(tdx_calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(error, TeeProofError::Platform { platform: TeeProofPlatform::Tdx, .. }));
+        assert_eq!(
+            error.platform_readiness(),
+            vec![(TeeProofPlatform::Nitro, true), (TeeProofPlatform::Tdx, false)]
+        );
     }
 }

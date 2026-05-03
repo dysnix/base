@@ -236,7 +236,6 @@ base-zk-db = { path = "crates/proof/zk/db" }
 base-zk-outbox = { path = "crates/proof/zk/outbox" }
 base-zk-service = { path = "crates/proof/zk/service" }
 base-challenger = { path = "crates/proof/challenge" }
-base-proof-contracts = { path = "crates/proof/contracts" }
 base-proof-tee-attestation = { path = "crates/proof/tee/attestation" }
 base-proof-tee-registrar = { path = "crates/proof/tee/registrar" }
 base-proof-tee-nitro-host = { path = "crates/proof/tee/nitro-host" }
@@ -252,6 +251,7 @@ base-proof-client = { path = "crates/proof/client", default-features = false }
 base-proof-driver = { path = "crates/proof/driver", default-features = false }
 base-proof-executor = { path = "crates/proof/executor", default-features = false }
 base-proof-preimage = { path = "crates/proof/preimage", default-features = false }
+base-proof-contracts = { path = "crates/proof/contracts", default-features = false }
 base-proof-primitives = { path = "crates/proof/primitives", default-features = false }
 base-proof-tee-tdx-attestation-prover = { path = "crates/proof/tee/tdx-attestation-prover" }
 base-proof-tee-nitro-attestation-prover = { path = "crates/proof/tee/nitro-attestation-prover" }

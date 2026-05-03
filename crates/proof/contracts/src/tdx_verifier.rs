@@ -6,6 +6,7 @@
 
 use alloy_sol_types::sol;
 
+#[cfg(not(feature = "clients"))]
 sol! {
     /// Supported zero-knowledge proof coprocessor types.
     ///
@@ -63,6 +64,110 @@ sol! {
     /// Intel TDX TCB status reduced to the contract policy statuses.
     ///
     /// `Unknown` is index 0 so uninitialized values fail closed.
+    enum TDXTcbStatus {
+        /// Unknown / unset.
+        Unknown,
+        /// Platform TCB is up to date.
+        UpToDate,
+        /// Platform needs software hardening.
+        SwHardeningNeeded,
+        /// Platform needs configuration hardening.
+        ConfigurationNeeded,
+        /// Platform needs configuration and software hardening.
+        ConfigurationAndSwHardeningNeeded,
+        /// Platform TCB is out of date.
+        OutOfDate,
+        /// Platform TCB is out of date and needs configuration hardening.
+        OutOfDateConfigurationNeeded,
+        /// Platform TCB has been revoked.
+        Revoked,
+    }
+
+    /// Public journal emitted by the off-chain/ZK TDX DCAP verifier.
+    struct TDXVerifierJournal {
+        /// Overall verification result after quote and collateral validation.
+        TDXVerificationResult result;
+        /// Intel TDX TCB status for the platform.
+        TDXTcbStatus tcbStatus;
+        /// Quote timestamp in milliseconds since Unix epoch.
+        uint64 timestamp;
+        /// Earliest expiration timestamp in seconds across accepted collateral.
+        uint64 collateralExpiration;
+        /// Hash of the Intel root CA used for validation.
+        bytes32 rootCaHash;
+        /// Hash of the PCK leaf certificate.
+        bytes32 pckCertHash;
+        /// Hash of the TCB info collateral.
+        bytes32 tcbInfoHash;
+        /// Hash of the QE identity collateral.
+        bytes32 qeIdentityHash;
+        /// Uncompressed secp256k1 public key: `0x04 || x || y`.
+        bytes publicKey;
+        /// Ethereum address derived from `publicKey`.
+        address signer;
+        /// Multiproof-compatible image hash derived from MRTD and RTMR0-3.
+        bytes32 imageHash;
+        /// Keccak256 hash of the MRTD measurement.
+        bytes32 mrTdHash;
+        /// First 32 bytes of `TDREPORT.REPORTDATA`.
+        bytes32 reportDataPrefix;
+        /// Last 32 bytes of `TDREPORT.REPORTDATA`.
+        bytes32 reportDataSuffix;
+    }
+
+}
+
+#[cfg(feature = "clients")]
+sol! {
+    /// Supported zero-knowledge proof coprocessor types.
+    enum ZkCoProcessorType {
+        /// Unknown / unset.
+        Unknown,
+        /// RISC Zero zkVM proving system.
+        RiscZero,
+        /// Succinct SP1 proving system.
+        Succinct,
+    }
+
+    /// Configuration for a specific zero-knowledge coprocessor.
+    struct ZkCoProcessorConfig {
+        /// Latest program ID for single attestation verification.
+        bytes32 verifierId;
+        /// Latest program ID for batch/aggregated verification.
+        bytes32 aggregatorId;
+        /// Default ZK verifier contract address.
+        address zkVerifier;
+    }
+
+    /// Statuses emitted by the TDX quote/collateral verifier.
+    enum TDXVerificationResult {
+        /// Unknown / unset.
+        Unknown,
+        /// TDX quote and collateral verification succeeded.
+        Success,
+        /// Quote parsing or structural validation failed.
+        InvalidQuote,
+        /// Quote signature validation failed.
+        QuoteSignatureInvalid,
+        /// Intel root CA was not trusted.
+        RootCaNotTrusted,
+        /// PCK certificate chain validation failed.
+        PckCertChainInvalid,
+        /// TCB info collateral validation failed.
+        TcbInfoInvalid,
+        /// QE identity collateral validation failed.
+        QeIdentityInvalid,
+        /// TCB status was not allowed by policy.
+        TcbStatusNotAllowed,
+        /// Required quote collateral had expired.
+        CollateralExpired,
+        /// Quote timestamp was outside policy.
+        InvalidTimestamp,
+        /// TD report data did not match the expected signer binding.
+        ReportDataMismatch,
+    }
+
+    /// Intel TDX TCB status reduced to the contract policy statuses.
     enum TDXTcbStatus {
         /// Unknown / unset.
         Unknown,

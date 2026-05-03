@@ -26,7 +26,7 @@ base-balance-monitor.workspace = true
 
 # Proof
 base-proof-rpc.workspace = true
-base-proof-contracts.workspace = true
+base-proof-contracts = { workspace = true, features = ["clients"] }
 base-proof-primitives = { workspace = true, features = ["rpc-client"] }
 
 # JSON-RPC

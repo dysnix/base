@@ -53,7 +53,7 @@ pub struct ProposerConfig {
     /// URL of the AWS Nitro Enclave prover RPC endpoint.
     pub nitro_prover_rpc: Url,
     /// URL of the Intel TDX prover RPC endpoint.
-    pub tdx_prover_rpc: Option<Url>,
+    pub tdx_prover_rpc: Url,
     /// URL of the L1 Ethereum RPC endpoint.
     pub l1_eth_rpc: Url,
     /// URL of the L2 Ethereum RPC endpoint.
@@ -110,9 +110,7 @@ impl ProposerConfig {
                 ConfigError::MissingRequired { field: "nitro-prover-rpc (or legacy prover-rpc)" },
             )?;
         validate_url(&nitro_prover_rpc, "nitro-prover-rpc")?;
-        if let Some(tdx_prover_rpc) = &proposer.tdx_prover_rpc {
-            validate_url(tdx_prover_rpc, "tdx-prover-rpc")?;
-        }
+        validate_url(&proposer.tdx_prover_rpc, "tdx-prover-rpc")?;
         validate_url(&proposer.l1_eth_rpc, "l1-eth-rpc")?;
         validate_url(&proposer.l2_eth_rpc, "l2-eth-rpc")?;
         validate_url(&proposer.rollup_rpc, "rollup-rpc")?;
@@ -254,7 +252,7 @@ mod tests {
                 allow_non_finalized: false,
                 prover_rpc: None,
                 nitro_prover_rpc: Some(Url::parse("http://localhost:8080").unwrap()),
-                tdx_prover_rpc: Some(Url::parse("http://localhost:8081").unwrap()),
+                tdx_prover_rpc: Url::parse("http://localhost:8081").unwrap(),
                 l1_eth_rpc: Url::parse("http://localhost:8545").unwrap(),
                 l2_eth_rpc: Url::parse("http://localhost:9545").unwrap(),
                 anchor_state_registry_addr: "0x1234567890123456789012345678901234567890"
@@ -309,7 +307,7 @@ mod tests {
         assert!(!config.dry_run);
         assert!(!config.allow_non_finalized);
         assert_eq!(config.nitro_prover_rpc.as_str(), "http://localhost:8080/");
-        assert_eq!(config.tdx_prover_rpc.unwrap().as_str(), "http://localhost:8081/");
+        assert_eq!(config.tdx_prover_rpc.as_str(), "http://localhost:8081/");
         assert_eq!(config.game_type, 1);
         assert_eq!(config.poll_interval, Duration::from_secs(12));
         assert_eq!(config.rpc_timeout, Duration::from_secs(30));
@@ -323,16 +321,6 @@ mod tests {
         cli.proposer.nitro_prover_rpc = None;
         let config = ProposerConfig::from_cli(cli).unwrap();
         assert_eq!(config.nitro_prover_rpc.as_str(), "http://localhost:9090/");
-    }
-
-    #[test]
-    fn test_tdx_prover_rpc_is_optional_for_legacy_nitro_mode() {
-        let mut cli = minimal_cli();
-        cli.proposer.tdx_prover_rpc = None;
-
-        let config = ProposerConfig::from_cli(cli).unwrap();
-
-        assert!(config.tdx_prover_rpc.is_none());
     }
 
     #[test]

@@ -2,6 +2,8 @@ set positional-arguments
 
 eif_describe_image := "base-prover-nitro-enclave-describe"
 eif_output := "eif.bin"
+tdx_verifier_guest := "base-proof-tee-tdx-attestation-prover-guest"
+tdx_verifier_image_id := "0x1f1bc81fae82605af46a4c9a20f641922b7542befd9219644c7e6c59ccdeccab"
 
 # Default recipe to display help information
 default:
@@ -92,6 +94,64 @@ describe-eif:
     echo "PCR values for {{ eif_describe_image }}:"
     docker run --rm --platform linux/amd64 {{ eif_describe_image }} \
         ./nitro-cli describe-eif --eif-path eif.bin
+
+# Build the TDX verifier guest and verify its RISC Zero image ID matches onchain config
+tdx-verifier-image-id expected=tdx_verifier_image_id:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    tee_dir="$(cd "$(dirname "{{ source_file() }}")" && pwd)"
+    guest_dir="$tee_dir/tdx-attestation-prover/guest"
+    helper_manifest="$tee_dir/nitro-attestation-prover/guest/tools/compute-image-id/Cargo.toml"
+    elf_path="$guest_dir/target/riscv32im-risc0-zkvm-elf/release/{{ tdx_verifier_guest }}"
+    r0bf_path="$guest_dir/target/{{ tdx_verifier_guest }}.r0bf"
+    expected="{{ expected }}"
+    expected="${expected#0x}"
+
+    command -v cargo >/dev/null 2>&1 || {
+        echo "error: cargo is required" >&2
+        exit 1
+    }
+    command -v rustup >/dev/null 2>&1 || {
+        echo "error: rustup is required" >&2
+        exit 1
+    }
+    if ! rustup toolchain list | grep -q '^risc0'; then
+        echo "error: RISC Zero rust toolchain 'risc0' is not installed" >&2
+        echo "install it with: rzup install" >&2
+        exit 1
+    fi
+
+    echo "Building TDX verifier guest ELF..."
+    (
+        cd "$guest_dir"
+        cargo +risc0 build --release --target riscv32im-risc0-zkvm-elf --ignore-rust-version
+    )
+
+    echo "Bundling ELF into R0BF and computing image ID..."
+    output=$(
+        RISC0_SKIP_BUILD_KERNELS=1 cargo run --quiet \
+            --manifest-path "$helper_manifest" -- \
+            "$elf_path" \
+            --output "$r0bf_path"
+    )
+    echo "$output"
+
+    actual=$(printf '%s\n' "$output" | sed -n 's/^Image ID: //p' | tail -n1)
+    if [ -z "$actual" ]; then
+        echo "error: failed to parse image ID from helper output" >&2
+        exit 1
+    fi
+    if [ "$actual" != "$expected" ]; then
+        echo "FAILURE: TDX verifier image ID does not match onchain config" >&2
+        echo "expected: 0x$expected" >&2
+        echo "actual:   0x$actual" >&2
+        exit 1
+    fi
+
+    echo "SUCCESS: TDX verifier image ID matches onchain config"
+    echo "image ID: 0x$actual"
+    echo "R0BF: $r0bf_path"
 
 # Build twice and compare to verify reproducibility
 verify-reproducible:

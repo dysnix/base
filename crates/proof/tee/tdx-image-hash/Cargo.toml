@@ -17,10 +17,10 @@ workspace = true
 
 [dependencies]
 # Base
-base-proof-contracts.workspace = true
 base-proof-tee-registrar.workspace = true
 base-proof-tee-tdx-prover.workspace = true
 base-proof-tee-tdx-verifier.workspace = true
+base-proof-contracts = { workspace = true, features = ["clients"] }
 base-proof-primitives = { workspace = true, features = ["rpc-client"] }
 
 # Alloy

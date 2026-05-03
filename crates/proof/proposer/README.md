@@ -8,7 +8,7 @@ TEE-based output proposer for Base.
 ## Overview
 
 - **Service**: Top-level orchestrator that wires RPC clients, contracts, the proving pipeline, transaction management, and the admin server.
-- **Pipeline**: Core proving pipeline that recovers on-chain state, generates proofs via an external prover, and coordinates proposal submission.
+- **Pipeline**: Core proving pipeline that recovers on-chain state, generates Nitro and TDX proofs via external provers, and coordinates proposal submission.
 - **Output Proposer**: L1 transaction submission via `OutputProposer` (`ProposalSubmitter` and `DryRunProposer` implementations).
 - **Driver**: Coordination loop that owns the pipeline tick and manages start/stop lifecycle.
 - **Admin**: JSON-RPC server for runtime control (`admin_startProposer`, `admin_stopProposer`, `admin_proposerRunning`).
@@ -20,9 +20,14 @@ TEE-based output proposer for Base.
 ### End-to-End Flow
 
 ```text
-L2 RPC (Reth) ──► Proposer ──► TEE Enclave
-Rollup RPC        │                │
-L1 RPC            │                │ Signed proposal
+L2 RPC (Reth) ──► Proposer ──► Nitro prover
+Rollup RPC        │          └──► TDX prover
+L1 RPC            │                │
+                  │                ▼
+                  │         Signed proposals
+                  │         concatenated into
+                  │         one TEE proof
+                  │                │
                   │                ▼
                   │         Proposer verifies
                   │         output root locally

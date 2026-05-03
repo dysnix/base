@@ -4,7 +4,7 @@
 //! Delegates all transaction lifecycle management (nonce, fees, signing, resubmission)
 //! to the shared [`TxManager`].
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use async_trait::async_trait;
 use base_proof_contracts::{
     encode_create_calldata, encode_extra_data, game_already_exists_selector,
@@ -51,6 +51,7 @@ pub trait OutputProposer: Send + Sync {
         proposal: &Proposal,
         parent_address: Address,
         intermediate_roots: &[B256],
+        proof_data: Bytes,
     ) -> Result<(), ProposerError>;
 }
 
@@ -65,12 +66,14 @@ impl OutputProposer for DryRunProposer {
         proposal: &Proposal,
         parent_address: Address,
         intermediate_roots: &[B256],
+        proof_data: Bytes,
     ) -> Result<(), ProposerError> {
         info!(
             l2_block_number = proposal.l2_block_number,
             parent_address = %parent_address,
             output_root = ?proposal.output_root,
             intermediate_roots_count = intermediate_roots.len(),
+            proof_data_len = proof_data.len(),
             "DRY RUN: would create dispute game (skipping submission)"
         );
         Ok(())
@@ -105,10 +108,9 @@ impl<T: TxManager + 'static> OutputProposer for ProposalSubmitter<T> {
         proposal: &Proposal,
         parent_address: Address,
         intermediate_roots: &[B256],
+        proof_data: Bytes,
     ) -> Result<(), ProposerError> {
         let l2_block_number = proposal.l2_block_number;
-        let proof_data =
-            proposal.build_proof_data().map_err(|e| ProposerError::Internal(e.to_string()))?;
         let extra_data = encode_extra_data(l2_block_number, parent_address, intermediate_roots);
         let calldata =
             encode_create_calldata(self.game_type, proposal.output_root, extra_data, proof_data);
@@ -233,6 +235,10 @@ mod tests {
         )
     }
 
+    fn test_proof_data() -> Bytes {
+        test_proposal().build_proof_data().unwrap()
+    }
+
     /// Mock transaction manager for testing.
     #[derive(Debug)]
     struct MockTxManager {
@@ -308,7 +314,8 @@ mod tests {
     async fn propose_output_success() {
         let tx_hash = B256::repeat_byte(0xAA);
         let submitter = test_submitter(Ok(receipt_with_status(true, tx_hash)));
-        let result = submitter.propose_output(&test_proposal(), Address::ZERO, &[]).await;
+        let result =
+            submitter.propose_output(&test_proposal(), Address::ZERO, &[], test_proof_data()).await;
         assert!(result.is_ok());
     }
 
@@ -316,14 +323,20 @@ mod tests {
     async fn propose_output_reverted() {
         let tx_hash = B256::repeat_byte(0xBB);
         let submitter = test_submitter(Ok(receipt_with_status(false, tx_hash)));
-        let err = submitter.propose_output(&test_proposal(), Address::ZERO, &[]).await.unwrap_err();
+        let err = submitter
+            .propose_output(&test_proposal(), Address::ZERO, &[], test_proof_data())
+            .await
+            .unwrap_err();
         assert!(matches!(err, ProposerError::TxReverted(_)));
     }
 
     #[tokio::test]
     async fn propose_output_tx_manager_error() {
         let submitter = test_submitter(Err(TxManagerError::NonceTooLow));
-        let err = submitter.propose_output(&test_proposal(), Address::ZERO, &[]).await.unwrap_err();
+        let err = submitter
+            .propose_output(&test_proposal(), Address::ZERO, &[], test_proof_data())
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, ProposerError::TxManager(TxManagerError::NonceTooLow)),
             "expected TxManager(NonceTooLow), got {err:?}",

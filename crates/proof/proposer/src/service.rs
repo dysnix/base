@@ -55,7 +55,7 @@ impl ProposerService {
             game_type = config.game_type,
             tee_image_hash = %config.tee_image_hash,
             nitro_prover_rpc = %config.nitro_prover_rpc,
-            tdx_prover_rpc = ?config.tdx_prover_rpc,
+            tdx_prover_rpc = %config.tdx_prover_rpc,
             poll_interval = ?config.poll_interval,
             rpc_timeout = ?config.rpc_timeout,
             max_parallel_proofs = config.max_parallel_proofs,
@@ -98,17 +98,11 @@ impl ProposerService {
             .wrap_err("failed to create Nitro prover RPC client")?;
         info!(platform = "nitro", endpoint = %config.nitro_prover_rpc, "Prover RPC client initialized");
 
-        let tdx_prover_client = if let Some(tdx_prover_rpc) = &config.tdx_prover_rpc {
-            let client = HttpClientBuilder::default()
-                .request_timeout(crate::constants::PROVER_TIMEOUT)
-                .build(tdx_prover_rpc.as_str())
-                .wrap_err("failed to create TDX prover RPC client")?;
-            info!(platform = "tdx", endpoint = %tdx_prover_rpc, "Prover RPC client initialized");
-            Some(client)
-        } else {
-            info!("TDX prover RPC not configured; preserving Nitro-only compatibility mode");
-            None
-        };
+        let tdx_prover_client = HttpClientBuilder::default()
+            .request_timeout(crate::constants::PROVER_TIMEOUT)
+            .build(config.tdx_prover_rpc.as_str())
+            .wrap_err("failed to create TDX prover RPC client")?;
+        info!(platform = "tdx", endpoint = %config.tdx_prover_rpc, "Prover RPC client initialized");
 
         let anchor_registry = Arc::new(AnchorStateRegistryContractClient::new(
             config.anchor_state_registry_addr,
@@ -159,13 +153,8 @@ impl ProposerService {
         let verifier_client: Arc<dyn AggregateVerifierClient> = Arc::new(verifier_client);
 
         let nitro_prover_client: Arc<dyn ProverClient> = Arc::new(nitro_prover_client);
-        let proof_sources = match tdx_prover_client {
-            Some(client) => {
-                let tdx_prover_client: Arc<dyn ProverClient> = Arc::new(client);
-                TeeProofSources::new(nitro_prover_client, tdx_prover_client)
-            }
-            None => TeeProofSources::new_nitro_only(nitro_prover_client),
-        };
+        let tdx_prover_client: Arc<dyn ProverClient> = Arc::new(tdx_prover_client);
+        let proof_sources = TeeProofSources::new(nitro_prover_client, tdx_prover_client);
 
         let (output_proposer, proposer_address): (Arc<dyn crate::OutputProposer>, Option<Address>) =
             if config.dry_run {
