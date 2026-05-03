@@ -36,7 +36,7 @@ rstest.workspace = true
 serde_json.workspace = true
 
 [features]
-default = ["clients"]
+default = [ "clients" ]
 clients = [
 	"dep:alloy-contract",
 	"dep:alloy-provider",

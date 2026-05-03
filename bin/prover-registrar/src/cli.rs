@@ -52,6 +52,9 @@ base_tx_manager::define_tx_manager_cli!("BASE_REGISTRAR");
 /// Default trusted certificate prefix length (root cert only).
 const DEFAULT_TRUSTED_CERTS_PREFIX: u8 = 1;
 
+/// Default JSON-RPC port for prover instances when not explicitly set.
+const DEFAULT_PROVER_PORT: u16 = 8000;
+
 /// Prover Registrar — automated TEE signer registration service.
 #[derive(Parser)]
 #[command(name = "prover-registrar", version, about)]
@@ -120,7 +123,7 @@ pub(crate) struct Cli {
     tdx_aws_region: Option<String>,
 
     /// TDX JSON-RPC port for AWS target group discovery.
-    #[arg(long, env = cli_env!("TDX_PROVER_PORT"), default_value_t = 8000)]
+    #[arg(long, env = cli_env!("TDX_PROVER_PORT"), default_value_t = DEFAULT_PROVER_PORT)]
     tdx_prover_port: u16,
 
     /// TDX prover endpoint for static discovery. Repeat for multiple endpoints.
@@ -477,13 +480,13 @@ fn parse_private_key(
 }
 
 /// Parse a hex-encoded image ID string into `[u32; 8]`.
-fn parse_image_id(s: &str) -> std::result::Result<[u32; 8], RegistrarError> {
+fn parse_image_id(field: &str, s: &str) -> std::result::Result<[u32; 8], RegistrarError> {
     let hex = s.strip_prefix("0x").unwrap_or(s);
     let bytes: [u8; 32] = hex::decode(hex)
-        .map_err(|e| RegistrarError::Config(format!("--image-id: {e}")))?
+        .map_err(|e| RegistrarError::Config(format!("{field}: {e}")))?
         .try_into()
         .map_err(|v: Vec<u8>| {
-            RegistrarError::Config(format!("--image-id: expected 32 bytes, got {}", v.len()))
+            RegistrarError::Config(format!("{field}: expected 32 bytes, got {}", v.len()))
         })?;
 
     let mut id = [0u32; 8];
@@ -711,7 +714,10 @@ impl Cli {
                 Ok(DiscoveryConfig::AwsTargetGroup(AwsDiscoveryConfig {
                     target_group_arn,
                     aws_region,
-                    port: self.nitro_prover_port.or(self.prover_port).unwrap_or(8000),
+                    port: self
+                        .nitro_prover_port
+                        .or(self.prover_port)
+                        .unwrap_or(DEFAULT_PROVER_PORT),
                 }))
             }
             DiscoveryMode::Static => {
@@ -763,7 +769,7 @@ impl Cli {
                                 "--boundless-verifier-program-url is required".into(),
                             )
                         })?,
-                    image_id: parse_image_id(image_id_hex)?,
+                    image_id: parse_image_id("--nitro-image-id", image_id_hex)?,
                     poll_interval: Duration::from_secs(self.boundless.boundless_poll_interval_secs),
                     timeout: Duration::from_secs(self.boundless.boundless_timeout_secs),
                     nitro_verifier_address: self.boundless.nitro_verifier_address,
@@ -880,7 +886,7 @@ impl Cli {
                                 "--tdx-boundless-verifier-program-url is required".into(),
                             )
                         })?,
-                    image_id: parse_image_id(image_id_hex)?,
+                    image_id: parse_image_id("--tdx-image-id", image_id_hex)?,
                     poll_interval: Duration::from_secs(self.tdx.tdx_boundless_poll_interval_secs),
                     timeout: Duration::from_secs(self.tdx.tdx_boundless_timeout_secs),
                     max_recovery_attempts: self.tdx.tdx_boundless_max_recovery_attempts,
@@ -909,11 +915,11 @@ impl Cli {
 
         info!(version = env!("CARGO_PKG_VERSION"), "Registrar starting");
 
-        // ── 1. Cancellation token and signal handler ─────────────────────────
+        // ── Cancellation token and signal handler ────────────────────────────
         let cancel = CancellationToken::new();
         let signal_handle = RuntimeManager::install_signal_handler(cancel.clone());
 
-        // ── 2. Metrics recorder (if enabled) ─────────────────────────────────
+        // ── Metrics recorder (if enabled) ────────────────────────────────────
         let metrics_enabled = metrics_config.enabled;
         metrics_config
             .init_with(|| {
@@ -922,7 +928,7 @@ impl Cli {
             })
             .wrap_err("failed to install Prometheus recorder")?;
 
-        // ── 3. Build L1 provider and tx manager ──────────────────────────────
+        // ── Build L1 provider and tx manager ─────────────────────────────────
         let l1_addr = config.signing.address();
         let provider = if metrics_enabled {
             let (layer, balance_rx) = BalanceMonitorLayer::new(
@@ -941,26 +947,19 @@ impl Cli {
             info!(%l1_addr, "L1 balance monitor started");
 
             for fleet in &config.fleets {
-                match &fleet.proving {
-                    PlatformProvingConfig::Nitro(ProvingConfig::Boundless(boundless)) => {
-                        start_boundless_balance_monitor(
-                            SignerAttestationKind::Nitro,
-                            boundless.signer.address(),
-                            boundless.rpc_url.clone(),
-                            cancel.clone(),
-                        );
+                let boundless = match &fleet.proving {
+                    PlatformProvingConfig::Nitro(ProvingConfig::Boundless(b)) => {
+                        Some((SignerAttestationKind::Nitro, b.signer.address(), &b.rpc_url))
                     }
-                    PlatformProvingConfig::Tdx(TdxProvingConfig::Boundless(boundless)) => {
-                        start_boundless_balance_monitor(
-                            SignerAttestationKind::Tdx,
-                            boundless.signer.address(),
-                            boundless.rpc_url.clone(),
-                            cancel.clone(),
-                        );
+                    PlatformProvingConfig::Tdx(TdxProvingConfig::Boundless(b)) => {
+                        Some((SignerAttestationKind::Tdx, b.signer.address(), &b.rpc_url))
                     }
                     PlatformProvingConfig::Nitro(ProvingConfig::Direct { .. })
                     | PlatformProvingConfig::Tdx(TdxProvingConfig::Direct)
-                    | PlatformProvingConfig::Tdx(TdxProvingConfig::RiscZero { .. }) => {}
+                    | PlatformProvingConfig::Tdx(TdxProvingConfig::RiscZero { .. }) => None,
+                };
+                if let Some((kind, addr, rpc)) = boundless {
+                    start_boundless_balance_monitor(kind, addr, rpc.clone(), cancel.clone());
                 }
             }
 
@@ -978,7 +977,7 @@ impl Cli {
         )
         .await?;
 
-        // ── 4. Build platform fleets ─────────────────────────────────────────
+        // ── Build platform fleets ────────────────────────────────────────────
         let mut fleets = Vec::with_capacity(config.fleets.len());
         for fleet_config in &config.fleets {
             let discovery = build_discovery(&fleet_config.discovery).await?;
@@ -986,14 +985,13 @@ impl Cli {
             fleets.push(ProverFleet::new(fleet_config.attestation_kind, discovery, proof_provider));
         }
 
-        // ── 5. Build registry client ─────────────────────────────────────────
+        // ── Build registry client ────────────────────────────────────────────
         let registry = RegistryContractClient::new(
             config.tee_prover_registry_address,
             config.l1_rpc_url.clone(),
         );
 
-        // ── 7. Start health HTTP server ──────────────────────────────────────
-        // health_handle is awaited during graceful shutdown in step 9 below.
+        // ── Start health HTTP server ─────────────────────────────────────────
         let ready = Arc::new(AtomicBool::new(false));
         let health_handle = tokio::spawn(HealthServer::serve(
             config.health_addr,
@@ -1001,7 +999,7 @@ impl Cli {
             cancel.clone(),
         ));
 
-        // ── 8. Build and run driver ──────────────────────────────────────────
+        // ── Build and run driver ─────────────────────────────────────────────
         let signer_client = ProverClient::new(config.prover_timeout);
         let driver_config = DriverConfig {
             registry_address: config.tee_prover_registry_address,
@@ -1033,7 +1031,7 @@ impl Cli {
         .await;
         drop(cancel_guard);
 
-        // ── 9. Graceful shutdown (always runs, even on driver error) ─────────
+        // ── Graceful shutdown (always runs, even on driver error) ────────────
         info!("Driver stopped, shutting down...");
         ready.store(false, Ordering::SeqCst);
         RegistrarMetrics::record_shutdown();
@@ -1091,7 +1089,6 @@ mod tests {
 
     const DEFAULT_POLL_INTERVAL_SECS: u64 = 30;
     const DEFAULT_PROVER_TIMEOUT_SECS: u64 = 30;
-    const DEFAULT_PROVER_PORT: u16 = 8000;
     const DEFAULT_HEALTH_PORT: u16 = 8080;
 
     // ── Arg builders ────────────────────────────────────────────────────
@@ -1655,7 +1652,7 @@ mod tests {
     #[case::with_prefix("0x0100000002000000030000000400000005000000060000000700000008000000", [1,2,3,4,5,6,7,8])]
     #[case::without_prefix("0100000002000000030000000400000005000000060000000700000008000000", [1,2,3,4,5,6,7,8])]
     fn parse_image_id_valid(#[case] input: &str, #[case] expected: [u32; 8]) {
-        assert_eq!(parse_image_id(input).unwrap(), expected);
+        assert_eq!(parse_image_id("--image-id", input).unwrap(), expected);
     }
 
     #[rstest]
@@ -1663,7 +1660,7 @@ mod tests {
     #[case::invalid_hex("zzzz")]
     #[case::empty("")]
     fn parse_image_id_invalid(#[case] input: &str) {
-        assert!(parse_image_id(input).is_err());
+        assert!(parse_image_id("--image-id", input).is_err());
     }
 
     // ── CRL config validation tests ─────────────────────────────────────
