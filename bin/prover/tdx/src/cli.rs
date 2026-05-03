@@ -1,12 +1,14 @@
 //! CLI definition for the Intel TDX TEE prover binary.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{fmt, net::SocketAddr, sync::Arc, time::Duration};
 
 use base_cli_utils::{LogConfig, RuntimeManager};
 use base_common_chains::Registry;
 use base_proof_host::ProverConfig;
 use base_proof_tee_tdx_prover::{MeasuredMockTdxQuoteProvider, TdxProverServer};
-use base_proof_tee_tdx_runtime::{ConfigfsTdxQuoteProvider, TdxRuntime, TdxSigner};
+use base_proof_tee_tdx_runtime::{
+    ConfigfsTdxQuoteProvider, TdxQuoteProvider, TdxRuntime, TdxSigner,
+};
 use clap::{Parser, Subcommand};
 use eyre::eyre;
 use tracing::info;
@@ -77,7 +79,7 @@ struct ProverServerArgs {
 }
 
 impl ProverServerArgs {
-    fn prover_config(&self) -> eyre::Result<ProverConfig> {
+    fn into_prover_config(self) -> eyre::Result<ProverConfig> {
         let rollup_config = Registry::rollup_config(self.l2_chain_id)
             .ok_or_else(|| eyre!("unknown L2 chain ID: {}", self.l2_chain_id))?
             .clone();
@@ -88,9 +90,9 @@ impl ProverServerArgs {
             .clone();
 
         Ok(ProverConfig {
-            l1_eth_url: self.l1_eth_url.clone(),
-            l2_eth_url: self.l2_eth_url.clone(),
-            l1_beacon_url: self.l1_beacon_url.clone(),
+            l1_eth_url: self.l1_eth_url,
+            l2_eth_url: self.l2_eth_url,
+            l1_beacon_url: self.l1_beacon_url,
             l2_chain_id: self.l2_chain_id,
             rollup_config,
             l1_config,
@@ -99,7 +101,7 @@ impl ProverServerArgs {
     }
 
     fn signer(&self) -> eyre::Result<TdxSigner> {
-        self.signer_key.as_ref().map_or_else(
+        self.signer_key.as_deref().map_or_else(
             || Ok(TdxSigner::generate(&mut rand_08::rngs::OsRng)),
             |key| {
                 TdxSigner::from_hex(key)
@@ -108,8 +110,20 @@ impl ProverServerArgs {
         )
     }
 
-    const fn proof_request_timeout(&self) -> Duration {
-        Duration::from_secs(self.proof_request_timeout_secs)
+    async fn run<P>(self, provider: P) -> eyre::Result<()>
+    where
+        P: TdxQuoteProvider + fmt::Debug + 'static,
+    {
+        let signer = self.signer()?;
+        let listen_addr = self.listen_addr;
+        let timeout = Duration::from_secs(self.proof_request_timeout_secs);
+        let config = self.into_prover_config()?;
+        let runtime = Arc::new(TdxRuntime::new(signer, provider));
+        let server = TdxProverServer::new(config, runtime, timeout);
+
+        let handle = server.run(listen_addr).await?;
+        handle.stopped().await;
+        Ok(())
     }
 }
 
@@ -150,30 +164,16 @@ impl Cli {
 
 impl ServerArgs {
     async fn run(self) -> eyre::Result<()> {
-        let config = self.server.prover_config()?;
-        let signer = self.server.signer()?;
         let provider = ConfigfsTdxQuoteProvider::new(&self.report_name);
-        let runtime = Arc::new(TdxRuntime::new(signer, provider));
-        let server = TdxProverServer::new(config, runtime, self.server.proof_request_timeout());
-
         info!(addr = %self.server.listen_addr, report_name = %self.report_name, "starting tdx prover server");
-        let handle = server.run(self.server.listen_addr).await?;
-        handle.stopped().await;
-        Ok(())
+        self.server.run(provider).await
     }
 }
 
 impl LocalArgs {
     async fn run(self) -> eyre::Result<()> {
-        let config = self.server.prover_config()?;
-        let signer = self.server.signer()?;
         let provider = MeasuredMockTdxQuoteProvider::local_mock();
-        let runtime = Arc::new(TdxRuntime::new(signer, provider));
-        let server = TdxProverServer::new(config, runtime, self.server.proof_request_timeout());
-
         info!(addr = %self.server.listen_addr, "starting tdx prover server (local mock mode)");
-        let handle = server.run(self.server.listen_addr).await?;
-        handle.stopped().await;
-        Ok(())
+        self.server.run(provider).await
     }
 }
