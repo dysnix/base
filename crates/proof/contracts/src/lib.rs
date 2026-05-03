@@ -48,10 +48,9 @@ mod nitro_enclave_verifier;
 pub use nitro_enclave_verifier::INitroEnclaveVerifier;
 
 mod tdx_verifier;
-#[cfg(feature = "clients")]
-pub use tdx_verifier::{ITDXTEEProverRegistry, ITDXVerifier};
 pub use tdx_verifier::{
-    TDXTcbStatus, TDXVerificationResult, TDXVerifierJournal, ZkCoProcessorConfig, ZkCoProcessorType,
+    ITDXTEEProverRegistry, ITDXVerifier, TDXTcbStatus, TDXVerificationResult, TDXVerifierJournal,
+    ZkCoProcessorConfig, ZkCoProcessorType,
 };
 
 #[cfg(feature = "clients")]
