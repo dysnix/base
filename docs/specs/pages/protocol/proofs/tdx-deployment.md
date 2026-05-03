@@ -155,8 +155,8 @@ Rollback must remove TDX from the active rollout without disturbing Nitro:
 1. Stop the registrar or restart it without every `--tdx-*` fleet flag.
 2. Deregister TDX signer addresses with `deregisterSigner(address)` on
    `TEEProverRegistry`.
-3. Restart the proposer without `--tdx-prover-rpc`; `--prover-rpc` and
-   `--nitro-prover-rpc` remain Nitro-compatible aliases.
+3. Restart the proposer with the Nitro endpoint configured by
+   `--nitro-prover-rpc`.
 4. Keep Nitro prover, registrar, and proposer settings unchanged.
 5. Confirm health and metrics no longer expect TDX endpoints before resuming
    production rollout.

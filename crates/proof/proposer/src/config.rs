@@ -32,12 +32,6 @@ pub enum ConfigError {
     /// Invalid signing configuration.
     #[error("invalid signing config: {0}")]
     Signing(base_tx_manager::ConfigError),
-    /// A required CLI field was not configured.
-    #[error("{field} is required")]
-    MissingRequired {
-        /// The field name that is required.
-        field: &'static str,
-    },
     /// Invalid transaction manager configuration.
     #[error("invalid tx manager config: {0}")]
     TxManager(base_tx_manager::ConfigError),
@@ -105,11 +99,7 @@ impl ProposerConfig {
     pub fn from_cli(cli: Cli) -> Result<Self, ConfigError> {
         let Cli { proposer, logging, metrics, health, admin } = cli;
 
-        let nitro_prover_rpc =
-            proposer.nitro_prover_rpc.clone().or_else(|| proposer.prover_rpc.clone()).ok_or(
-                ConfigError::MissingRequired { field: "nitro-prover-rpc (or legacy prover-rpc)" },
-            )?;
-        validate_url(&nitro_prover_rpc, "nitro-prover-rpc")?;
+        validate_url(&proposer.nitro_prover_rpc, "nitro-prover-rpc")?;
         validate_url(&proposer.tdx_prover_rpc, "tdx-prover-rpc")?;
         validate_url(&proposer.l1_eth_rpc, "l1-eth-rpc")?;
         validate_url(&proposer.l2_eth_rpc, "l2-eth-rpc")?;
@@ -188,7 +178,7 @@ impl ProposerConfig {
         Ok(Self {
             dry_run: proposer.dry_run,
             allow_non_finalized: proposer.allow_non_finalized,
-            nitro_prover_rpc,
+            nitro_prover_rpc: proposer.nitro_prover_rpc,
             tdx_prover_rpc: proposer.tdx_prover_rpc,
             l1_eth_rpc: proposer.l1_eth_rpc,
             l2_eth_rpc: proposer.l2_eth_rpc,
@@ -250,8 +240,7 @@ mod tests {
             proposer: ProposerArgs {
                 dry_run: false,
                 allow_non_finalized: false,
-                prover_rpc: None,
-                nitro_prover_rpc: Some(Url::parse("http://localhost:8080").unwrap()),
+                nitro_prover_rpc: Url::parse("http://localhost:8080").unwrap(),
                 tdx_prover_rpc: Url::parse("http://localhost:8081").unwrap(),
                 l1_eth_rpc: Url::parse("http://localhost:8545").unwrap(),
                 l2_eth_rpc: Url::parse("http://localhost:9545").unwrap(),
@@ -312,15 +301,6 @@ mod tests {
         assert_eq!(config.poll_interval, Duration::from_secs(12));
         assert_eq!(config.rpc_timeout, Duration::from_secs(30));
         assert_eq!(config.max_parallel_proofs, 1);
-    }
-
-    #[test]
-    fn test_legacy_prover_rpc_used_as_nitro_alias() {
-        let mut cli = minimal_cli();
-        cli.proposer.prover_rpc = Some(Url::parse("http://localhost:9090").unwrap());
-        cli.proposer.nitro_prover_rpc = None;
-        let config = ProposerConfig::from_cli(cli).unwrap();
-        assert_eq!(config.nitro_prover_rpc.as_str(), "http://localhost:9090/");
     }
 
     #[test]
