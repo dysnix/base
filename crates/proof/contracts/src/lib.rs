@@ -35,8 +35,5 @@ pub use tee_prover_registry::{
 mod nitro_enclave_verifier;
 pub use nitro_enclave_verifier::INitroEnclaveVerifier;
 
-mod tdx_tee_prover_registry;
-pub use tdx_tee_prover_registry::ITDXTEEProverRegistry;
-
 mod error;
 pub use error::ContractError;

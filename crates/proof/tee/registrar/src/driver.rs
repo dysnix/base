@@ -9,7 +9,7 @@ use std::{borrow::Cow, collections::HashSet, error::Error, fmt, sync::Mutex, tim
 
 use alloy_primitives::{Address, Bytes, FixedBytes, hex};
 use alloy_sol_types::SolCall;
-use base_proof_contracts::{INitroEnclaveVerifier, ITDXTEEProverRegistry, ITEEProverRegistry};
+use base_proof_contracts::{INitroEnclaveVerifier, ITEEProverRegistry};
 use base_proof_tee_attestation::{TeeAttestationKind, TeeAttestationProofProvider};
 use base_proof_tee_nitro_verifier::AttestationReport;
 use base_tx_manager::{TxCandidate, TxManager, TxManagerError};
@@ -698,7 +698,7 @@ where
                 .abi_encode(),
             ),
             TeeAttestationKind::Tdx => Bytes::from(
-                ITDXTEEProverRegistry::registerTDXSignerCall {
+                ITEEProverRegistry::registerTDXSignerCall {
                     output: proof.output,
                     proofBytes: proof.proof_bytes,
                 }
@@ -2115,7 +2115,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_instance_tdx_registers_with_tdx_registry_selector() {
+    async fn process_instance_tdx_registers_with_tdx_signer_selector() {
         let signer_client = MockSignerClient::from_keys(&[(EP1, &HARDHAT_KEY_0)])
             .with_attestation_kind(EP1, SignerAttestationKind::Tdx)
             .with_attestations(EP1, vec![encoded_tdx_prover_input(&HARDHAT_KEY_0)]);
@@ -2136,7 +2136,7 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(
             &sent[0][..4],
-            ITDXTEEProverRegistry::registerTDXSignerCall::SELECTOR,
+            ITEEProverRegistry::registerTDXSignerCall::SELECTOR,
             "TDX proofs should use registerTDXSigner"
         );
     }
@@ -2167,7 +2167,7 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(
             &sent[0][..4],
-            ITDXTEEProverRegistry::registerTDXSignerCall::SELECTOR,
+            ITEEProverRegistry::registerTDXSignerCall::SELECTOR,
             "static-discovered TDX mock prover should submit registerTDXSigner calldata"
         );
     }
@@ -2388,7 +2388,7 @@ mod tests {
         let sent = tx.sent_calldata();
         assert_eq!(sent.len(), 3, "healthy TDX fleet should still register signers");
         assert!(sent.iter().all(|calldata| {
-            calldata[..4] == ITDXTEEProverRegistry::registerTDXSignerCall::SELECTOR
+            calldata[..4] == ITEEProverRegistry::registerTDXSignerCall::SELECTOR
         }));
     }
 
@@ -2424,7 +2424,7 @@ mod tests {
 
         let sent = tx.sent_calldata();
         assert_eq!(sent.len(), 1);
-        assert_eq!(&sent[0][..4], ITDXTEEProverRegistry::registerTDXSignerCall::SELECTOR);
+        assert_eq!(&sent[0][..4], ITEEProverRegistry::registerTDXSignerCall::SELECTOR);
     }
 
     #[tokio::test]

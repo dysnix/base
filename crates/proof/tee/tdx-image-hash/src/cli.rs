@@ -111,7 +111,7 @@ pub struct RegistryArgs {
     #[arg(long, env = "L1_RPC_URL", requires = "registry_address")]
     pub l1_rpc_url: Option<Url>,
 
-    /// `TEEProverRegistry` or `TDXTEEProverRegistry` contract address.
+    /// `TEEProverRegistry` contract address.
     #[arg(long, env = "TEE_PROVER_REGISTRY_ADDRESS", requires = "l1_rpc_url")]
     pub registry_address: Option<Address>,
 }
