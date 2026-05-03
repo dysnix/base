@@ -160,13 +160,10 @@ impl PipelineState {
         self.proved.retain(|&target, _| target > recovered_block);
         self.inflight.retain(|&target| target > recovered_block);
         self.retry_counts.retain(|&target, _| target > recovered_block);
-        // NOTE: we intentionally do NOT abort in-flight submit tasks here.
-        // When the recovered block advances past the submitting block, it
-        // means the transaction already landed on L1.  Aborting the task
-        // would prevent `handle_submit_result` from recording the
-        // `last_proposed_block` metric and performing proper state cleanup.
-        // The task will finish with `Success` or `GameAlreadyExists`, and
-        // `handle_submit_result` will clear `submitting` and update metrics.
+        // In-flight submit tasks are intentionally NOT aborted: when recovery
+        // advances past `submitting`, the L1 tx already landed and the task's
+        // Success/GameAlreadyExists outcome is needed to record metrics and
+        // clear `submitting` in `handle_submit_result`.
     }
 }
 
@@ -335,7 +332,12 @@ where
             Metrics::safe_head().set(safe_head as f64);
             state.prune_stale(recovered.l2_block_number);
             self.dispatch_proofs(&recovered, safe_head, state).await?;
-            if self.is_idle_after_recovery(&recovered, safe_head, state) {
+            // No next target left to dispatch and nothing in flight → fully
+            // caught up; advertise readiness even if no proof has completed
+            // this session.
+            let next_target =
+                recovered.l2_block_number.checked_add(self.config.driver.block_interval);
+            if next_target.is_none_or(|t| t > safe_head) && state.is_empty() {
                 self.set_ready(true);
             }
         }
@@ -367,10 +369,9 @@ where
         let mut start_output = recovered.output_root;
 
         while cursor <= safe_head && state.inflight.len() < self.config.max_parallel_proofs {
-            // Skip blocks already being handled (in-flight, proved, or
-            // submitting).  Track the last skipped block so we can fetch
-            // its output root once — only when we actually find a block
-            // to dispatch.
+            // After a contiguous run of skipped (already-handled) blocks, the
+            // chained proof must start from the last skipped block, so its
+            // output root is fetched once after the run instead of per skip.
             let mut last_skipped = None;
             while cursor <= safe_head
                 && (state.inflight.contains(&cursor)
@@ -380,23 +381,14 @@ where
                 last_skipped = Some(cursor);
                 cursor = match cursor.checked_add(self.config.driver.block_interval) {
                     Some(c) => c,
-                    // Overflow means there are no further blocks to dispatch.
                     None => return Ok(()),
                 };
             }
 
-            // Nothing left to dispatch after skipping.
-            if cursor > safe_head {
+            if cursor > safe_head || state.inflight.len() >= self.config.max_parallel_proofs {
                 break;
             }
 
-            // Still at max capacity after skipping.
-            if state.inflight.len() >= self.config.max_parallel_proofs {
-                break;
-            }
-
-            // Fetch the output root for the last skipped block so the
-            // proof request chains correctly.
             if let Some(skipped) = last_skipped {
                 match self.rollup_client.output_at_block(skipped).await {
                     Ok(output) => {
@@ -462,21 +454,6 @@ where
         Ok(())
     }
 
-    fn is_idle_after_recovery(
-        &self,
-        recovered: &RecoveredState,
-        safe_head: u64,
-        state: &PipelineState,
-    ) -> bool {
-        let next_target =
-            match recovered.l2_block_number.checked_add(self.config.driver.block_interval) {
-                Some(target) => target,
-                None => return state.is_empty(),
-            };
-
-        next_target > safe_head && state.is_empty()
-    }
-
     fn try_submit(&self, state: &mut PipelineState) {
         if state.submitting.is_some() || !state.submit_tasks.is_empty() {
             return;
@@ -538,6 +515,21 @@ where
         });
     }
 
+    /// Shared cleanup after a submission lands on-chain (`Success` or
+    /// `GameAlreadyExists`). Records metrics, clears per-block bookkeeping,
+    /// and refreshes the recovery cache so `prune_stale` can drop completed
+    /// proofs.
+    async fn finalize_successful_submit(&self, target_block: u64, state: &mut PipelineState) {
+        Metrics::last_proposed_block().set(target_block as f64);
+        state.retry_counts.remove(&target_block);
+        state.submitting = None;
+        match self.recover_latest_state(&mut state.cached_recovery).await {
+            Ok(recovered) => state.prune_stale(recovered.l2_block_number),
+            Err(e) => warn!(error = %e, "Failed to recover state after submission"),
+        }
+        state.record_gauges();
+    }
+
     /// Returns `true` when the caller should immediately attempt the next
     /// submission (i.e. on success). Returns `false` on failure/discard so
     /// that retry is deferred to the next poll-interval tick.
@@ -563,52 +555,26 @@ where
         match outcome {
             SubmitOutcome::Success { target_block } => {
                 info!(target_block, "Submission successful");
-                Metrics::last_proposed_block().set(target_block as f64);
-                state.retry_counts.remove(&target_block);
-                state.submitting = None;
-                // Don't clear the cache — recover_latest_state will see the
-                // new game_count and incrementally scan just the new entry.
-                match self.recover_latest_state(&mut state.cached_recovery).await {
-                    Ok(recovered) => {
-                        state.prune_stale(recovered.l2_block_number);
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to recover state after submission");
-                    }
-                }
-                state.record_gauges();
+                self.finalize_successful_submit(target_block, state).await;
                 true
             }
             SubmitOutcome::GameAlreadyExists { target_block } => {
                 info!(target_block, "Game already exists on chain");
-                Metrics::last_proposed_block().set(target_block as f64);
-                state.retry_counts.remove(&target_block);
-                state.submitting = None;
-                // The game exists but the forward walk missed it — most
-                // likely because `game_count` was read from a different L1
-                // RPC replica than the one serving `factory.games()`.
-                // Decrement the cached game_count so the next recovery sees
-                // `actual_count > cached_count` and performs an incremental
-                // forward walk from the cached tip (O(1): a single
-                // `factory.games()` lookup at the next expected block).
-                if let Some(ref mut cached) = state.cached_recovery {
+                // Decrement cached game_count so the next forward walk discovers
+                // the existing game with a single incremental `factory.games()`
+                // lookup. The walk missed it on the prior tick because
+                // `game_count` was likely served by a different L1 RPC replica
+                // than the one fielding `factory.games()`.
+                if let Some(cached) = &mut state.cached_recovery {
                     cached.game_count = cached.game_count.saturating_sub(1);
                 }
-                match self.recover_latest_state(&mut state.cached_recovery).await {
-                    Ok(recovered) => {
-                        state.prune_stale(recovered.l2_block_number);
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to recover state after GameAlreadyExists");
-                    }
-                }
-                state.record_gauges();
+                self.finalize_successful_submit(target_block, state).await;
                 true
             }
             SubmitOutcome::RootMismatch { target_block } => {
                 warn!(target_block, "Output root mismatch at submit time, resetting pipeline");
                 Metrics::root_mismatch_total().increment(1);
-                self.set_dual_proof_ready(false);
+                self.mark_all_platforms_unready();
                 state.reset();
                 false
             }
@@ -699,9 +665,7 @@ where
                 debug!(error = %join_err, "Proof task cancelled");
             }
             Err(join_err) => {
-                self.set_ready(false);
-                Metrics::tee_platform_ready(TeeProofPlatform::Nitro.label()).set(0.0);
-                Metrics::tee_platform_ready(TeeProofPlatform::Tdx.label()).set(0.0);
+                self.mark_all_platforms_unready();
                 warn!(error = %join_err, "Proof task panicked");
                 state.reset();
             }
@@ -714,11 +678,15 @@ where
         }
     }
 
-    fn set_dual_proof_ready(&self, ready: bool) {
-        let value = if ready { 1.0 } else { 0.0 };
-        self.set_ready(ready);
-        Metrics::tee_platform_ready(TeeProofPlatform::Nitro.label()).set(value);
-        Metrics::tee_platform_ready(TeeProofPlatform::Tdx.label()).set(value);
+    fn mark_platform_unready(&self, platform: TeeProofPlatform) {
+        self.set_ready(false);
+        Metrics::tee_platform_ready(platform.label()).set(0.0);
+    }
+
+    fn mark_all_platforms_unready(&self) {
+        self.set_ready(false);
+        Metrics::tee_platform_ready(TeeProofPlatform::Nitro.label()).set(0.0);
+        Metrics::tee_platform_ready(TeeProofPlatform::Tdx.label()).set(0.0);
     }
 
     /// Attempts to recover on-chain state and fetch the safe head.
@@ -787,27 +755,25 @@ where
         &self,
         cache: &mut Option<CachedRecovery>,
     ) -> Result<RecoveredState, ProposerError> {
-        let count = self
-            .factory_client
-            .game_count()
-            .await
-            .map_err(|e| ProposerError::Contract(format!("recovery game_count failed: {e}")))?;
+        let (count, anchor) = tokio::try_join!(
+            async {
+                self.factory_client.game_count().await.map_err(|e| {
+                    ProposerError::Contract(format!("recovery game_count failed: {e}"))
+                })
+            },
+            async {
+                self.anchor_registry
+                    .get_anchor_root()
+                    .await
+                    .map_err(|e| ProposerError::Contract(format!("get_anchor_root failed: {e}")))
+            },
+        )?;
 
-        // Read the anchor root early so it can be included in the cache key.
-        let anchor = self
-            .anchor_registry
-            .get_anchor_root()
-            .await
-            .map_err(|e| ProposerError::Contract(format!("get_anchor_root failed: {e}")))?;
-
-        // The cached tip is valid as long as the anchor hasn't advanced past
-        // it. The anchor advances when games resolve (~every 20 min after the
-        // dispute window elapses), but it always stays behind the chain tip.
+        // The anchor only advances when games resolve, so a cached tip stays
+        // valid until the anchor catches up to it.
         let tip_still_valid =
             |cached: &CachedRecovery| anchor.l2_block_number <= cached.state.l2_block_number;
 
-        // Fast path: game_count unchanged and anchor still behind tip →
-        // return the cached state with zero additional RPCs.
         if let Some(cached) = cache.as_ref()
             && tip_still_valid(cached)
             && cached.game_count == count
@@ -816,17 +782,6 @@ where
             return Ok(cached.state);
         }
 
-        // ── Forward walk ────────────────────────────────────────────────
-        //
-        // When game_count increased and the anchor is still at or behind
-        // the cached tip, resume from the tip instead of re-walking from
-        // the anchor. This turns post-submission recovery from O(K) to
-        // O(1).
-        //
-        // A full walk from the anchor is required when:
-        // - No cache exists (cold start / pipeline reset).
-        // - The anchor advanced past the cached tip (governance / anomaly).
-        // - game_count decreased (L1 reorg removed games).
         let start = match cache.as_ref() {
             Some(cached) if tip_still_valid(cached) && count > cached.game_count => {
                 debug!(
@@ -893,31 +848,30 @@ where
             // so this also provides the canonical output root — no separate
             // `output_at_block` call needed.
             let intermediate_blocks = self.intermediate_block_numbers(parent_block)?;
-            let intermediate_roots =
-                match self.fetch_canonical_roots(intermediate_blocks.clone()).await {
-                    Ok(roots) => roots,
-                    Err(ProposerError::Rpc(RpcError::BlockNotFound(_))) => {
-                        // The block doesn't exist yet (ahead of safe head).
-                        // This is the natural termination point of the walk.
-                        debug!(
-                            block = expected_block,
-                            "Block not available yet, treating as end of walk"
-                        );
-                        break;
-                    }
-                    Err(e) => {
-                        // All other RPC errors (retryable or not) propagate so
-                        // recovery retries on the next tick rather than caching
-                        // a partial result.
-                        warn!(
-                            expected_block,
-                            parent_block,
-                            error = %e,
-                            "Forward walk failed to fetch canonical roots"
-                        );
-                        return Err(e);
-                    }
-                };
+            let intermediate_roots = match self.fetch_canonical_roots(&intermediate_blocks).await {
+                Ok(roots) => roots,
+                Err(ProposerError::Rpc(RpcError::BlockNotFound(_))) => {
+                    // The block doesn't exist yet (ahead of safe head).
+                    // This is the natural termination point of the walk.
+                    debug!(
+                        block = expected_block,
+                        "Block not available yet, treating as end of walk"
+                    );
+                    break;
+                }
+                Err(e) => {
+                    // All other RPC errors (retryable or not) propagate so
+                    // recovery retries on the next tick rather than caching
+                    // a partial result.
+                    warn!(
+                        expected_block,
+                        parent_block,
+                        error = %e,
+                        "Forward walk failed to fetch canonical roots"
+                    );
+                    return Err(e);
+                }
+            };
 
             // Extract the canonical root for the target block (always the
             // last intermediate block).
@@ -1006,12 +960,12 @@ where
     /// Concurrently fetches canonical output roots for the given block numbers.
     async fn fetch_canonical_roots(
         &self,
-        blocks: Vec<u64>,
+        blocks: &[u64],
     ) -> Result<HashMap<u64, B256>, ProposerError> {
         if blocks.is_empty() {
             return Ok(HashMap::new());
         }
-        stream::iter(blocks)
+        stream::iter(blocks.iter().copied())
             .map(|block_number| {
                 let rollup = &self.rollup_client;
                 async move {
@@ -1076,7 +1030,6 @@ where
         intermediate_roots: &[B256],
         registry_address: Address,
     ) -> Result<SignerValidity, ProposerError> {
-        // Reconstruct the journal that the enclave signed over.
         let journal = ProofJournal {
             proposer: self.config.driver.proposer_address,
             l1_origin_hash: aggregate_proposal.l1_origin_hash,
@@ -1090,139 +1043,158 @@ where
         };
         let digest = keccak256(journal.encode());
 
-        // Parse the 65-byte ECDSA signature (r ‖ s ‖ v).
-        let sig_bytes = aggregate_proposal.signature.as_ref();
-        let sig = Signature::try_from(sig_bytes)
+        let sig = Signature::try_from(aggregate_proposal.signature.as_ref())
             .map_err(|e| ProposerError::Internal(format!("invalid proposal signature: {e}")))?;
-
         let signer = sig
             .recover_address_from_prehash(&digest)
             .map_err(|e| ProposerError::Internal(format!("signer recovery failed: {e}")))?;
 
         debug!(platform = platform.label(), signer = %signer, "recovered TEE signer from aggregate proposal");
 
-        // Call isValidSigner on the registry via the L1 provider.
-        let calldata = ITEEProverRegistry::isValidSignerCall { signer }.abi_encode();
-        let result = self
-            .l1_client
-            .call_contract(registry_address, calldata.into(), None)
-            .await
-            .map_err(ProposerError::Rpc)?;
-
-        let is_valid =
-            ITEEProverRegistry::isValidSignerCall::abi_decode_returns(&result).map_err(|e| {
-                ProposerError::Internal(format!("failed to decode isValidSigner response: {e}"))
-            })?;
+        // isValidSigner errors propagate so the submission can be retried.
+        let is_valid = self
+            .call_registry(registry_address, ITEEProverRegistry::isValidSignerCall { signer })
+            .await?;
         debug!(platform = platform.label(), signer = %signer, is_valid, "isValidSigner check result");
 
         if is_valid {
             return Ok(SignerValidity::Valid);
         }
 
-        let registered_calldata =
-            ITEEProverRegistry::isRegisteredSignerCall { signer }.abi_encode();
-        let registered_result = match self
-            .l1_client
-            .call_contract(registry_address, registered_calldata.into(), None)
-            .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    platform = platform.label(),
-                    signer = %signer,
-                    "failed to classify invalid TEE signer registration status"
-                );
-                return Ok(SignerValidity::Invalid { signer });
-            }
+        // Diagnostic calls are independent — fan out concurrently. Any failure
+        // collapses to `Invalid { signer }` so the proof is discarded with a
+        // generic reason.
+        let log_diag = |what: &'static str, e: &ProposerError| {
+            warn!(error = %e, platform = platform.label(), signer = %signer, "{what}");
         };
-        let is_registered = match ITEEProverRegistry::isRegisteredSignerCall::abi_decode_returns(
-            &registered_result,
-        ) {
-            Ok(is_registered) => is_registered,
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    platform = platform.label(),
-                    signer = %signer,
-                    "failed to decode invalid TEE signer registration status"
-                );
-                return Ok(SignerValidity::Invalid { signer });
-            }
-        };
+        let (registered_res, signer_image_res, expected_image_res) = tokio::join!(
+            self.call_registry(
+                registry_address,
+                ITEEProverRegistry::isRegisteredSignerCall { signer }
+            ),
+            self.call_registry(
+                registry_address,
+                ITEEProverRegistry::signerImageHashCall { signer }
+            ),
+            self.call_registry(registry_address, ITEEProverRegistry::getExpectedImageHashCall {}),
+        );
 
+        let is_registered = match registered_res {
+            Ok(v) => v,
+            Err(e) => {
+                log_diag("failed to classify invalid TEE signer registration status", &e);
+                return Ok(SignerValidity::Invalid { signer });
+            }
+        };
         if !is_registered {
             return Ok(SignerValidity::NotRegistered { signer });
         }
-
-        let signer_image_calldata = ITEEProverRegistry::signerImageHashCall { signer }.abi_encode();
-        let signer_image_result = match self
-            .l1_client
-            .call_contract(registry_address, signer_image_calldata.into(), None)
-            .await
-        {
-            Ok(result) => result,
+        let signer_image_hash = match signer_image_res {
+            Ok(v) => v,
             Err(e) => {
-                warn!(
-                    error = %e,
-                    platform = platform.label(),
-                    signer = %signer,
-                    "failed to classify invalid TEE signer image hash"
-                );
+                log_diag("failed to classify invalid TEE signer image hash", &e);
                 return Ok(SignerValidity::Invalid { signer });
             }
         };
-        let signer_image_hash =
-            match ITEEProverRegistry::signerImageHashCall::abi_decode_returns(&signer_image_result)
-            {
-                Ok(signer_image_hash) => signer_image_hash,
-                Err(e) => {
-                    warn!(
-                        error = %e,
-                        platform = platform.label(),
-                        signer = %signer,
-                        "failed to decode invalid TEE signer image hash"
-                    );
-                    return Ok(SignerValidity::Invalid { signer });
-                }
-            };
-
-        let expected_calldata = ITEEProverRegistry::getExpectedImageHashCall {}.abi_encode();
-        let expected_result = match self
-            .l1_client
-            .call_contract(registry_address, expected_calldata.into(), None)
-            .await
-        {
-            Ok(result) => result,
+        let expected_image_hash = match expected_image_res {
+            Ok(v) => v,
             Err(e) => {
+                log_diag("failed to classify invalid TEE signer expected image hash", &e);
+                return Ok(SignerValidity::Invalid { signer });
+            }
+        };
+
+        Ok(SignerValidity::WrongImageHash { signer, signer_image_hash, expected_image_hash })
+    }
+
+    /// Issues a single `ITEEProverRegistry` call and decodes the typed return.
+    async fn call_registry<C: SolCall>(
+        &self,
+        registry_address: Address,
+        call: C,
+    ) -> Result<C::Return, ProposerError> {
+        let result = self
+            .l1_client
+            .call_contract(registry_address, call.abi_encode().into(), None)
+            .await
+            .map_err(ProposerError::Rpc)?;
+        C::abi_decode_returns(&result).map_err(|e| {
+            ProposerError::Internal(format!("failed to decode registry response: {e}"))
+        })
+    }
+
+    /// Translates a per-platform `SignerValidity` result into a `SubmitAction`.
+    ///
+    /// `Valid` updates the readiness gauge for the platform; everything else
+    /// short-circuits the surrounding submission with `Failed` (transient) or
+    /// `Discard` (permanently invalid proof).
+    fn process_signer_validity(
+        &self,
+        platform: TeeProofPlatform,
+        result: Result<SignerValidity, ProposerError>,
+        target_block: u64,
+    ) -> Result<(), SubmitAction> {
+        match result {
+            Ok(SignerValidity::Valid) => {
+                Metrics::tee_platform_ready(platform.label()).set(1.0);
+                Ok(())
+            }
+            Ok(SignerValidity::Invalid { signer }) => {
                 warn!(
-                    error = %e,
+                    platform = platform.label(), signer = %signer, target_block,
+                    "TEE signer is invalid on-chain, discarding proof"
+                );
+                Err(self.discard_invalid_signer(
+                    platform,
+                    format!("{platform} TEE signer invalid on-chain"),
+                ))
+            }
+            Ok(SignerValidity::NotRegistered { signer }) => {
+                warn!(
+                    platform = platform.label(), signer = %signer, target_block,
+                    "TEE signer is not registered on-chain, discarding proof"
+                );
+                Err(self.discard_invalid_signer(
+                    platform,
+                    format!("{platform} TEE signer not registered on-chain"),
+                ))
+            }
+            Ok(SignerValidity::WrongImageHash {
+                signer,
+                signer_image_hash,
+                expected_image_hash,
+            }) => {
+                warn!(
                     platform = platform.label(),
                     signer = %signer,
                     signer_image_hash = %signer_image_hash,
-                    "failed to classify invalid TEE signer expected image hash"
+                    expected_image_hash = %expected_image_hash,
+                    target_block,
+                    "TEE signer is registered with the wrong image hash, discarding proof"
                 );
-                return Ok(SignerValidity::Invalid { signer });
+                Err(self.discard_invalid_signer(
+                    platform,
+                    format!(
+                        "{platform} TEE signer registered with wrong image hash: signer_image_hash={signer_image_hash}, expected_image_hash={expected_image_hash}"
+                    ),
+                ))
             }
-        };
-        let expected_image_hash =
-            match ITEEProverRegistry::getExpectedImageHashCall::abi_decode_returns(&expected_result)
-            {
-                Ok(expected_image_hash) => expected_image_hash,
-                Err(e) => {
-                    warn!(
-                        error = %e,
-                        platform = platform.label(),
-                        signer = %signer,
-                        signer_image_hash = %signer_image_hash,
-                        "failed to decode invalid TEE signer expected image hash"
-                    );
-                    return Ok(SignerValidity::Invalid { signer });
-                }
-            };
+            Err(e) => {
+                self.mark_platform_unready(platform);
+                warn!(
+                    error = %e, platform = platform.label(), target_block,
+                    "signer validity check failed, retrying submission"
+                );
+                Err(SubmitAction::Failed(e))
+            }
+        }
+    }
 
-        Ok(SignerValidity::WrongImageHash { signer, signer_image_hash, expected_image_hash })
+    fn discard_invalid_signer(&self, platform: TeeProofPlatform, reason: String) -> SubmitAction {
+        self.mark_platform_unready(platform);
+        Metrics::tee_platform_signer_invalid_total(platform.label()).increment(1);
+        Metrics::tee_signer_invalid_total().increment(1);
+        SubmitAction::Discard(ProposerError::Internal(reason))
     }
 
     #[instrument(skip_all, fields(target_block = target_block, parent_address = %parent_address))]
@@ -1235,25 +1207,6 @@ where
         let submission_proof = proof_result.submission_proof();
         let (aggregate_proposal, proposals) = submission_proof.proposals();
 
-        // JIT validation: check that the proved output root still matches canonical.
-        let canonical_output = self
-            .rollup_client
-            .output_at_block(target_block)
-            .await
-            .map_err(|e| SubmitAction::Failed(ProposerError::Rpc(e)))?;
-
-        if aggregate_proposal.output_root != canonical_output.output_root {
-            warn!(
-                proposal_root = ?aggregate_proposal.output_root,
-                canonical_root = ?canonical_output.output_root,
-                target_block,
-                "Proposal output root does not match canonical chain at submit time"
-            );
-            self.set_dual_proof_ready(false);
-            return Err(SubmitAction::RootMismatch);
-        }
-
-        // Extract intermediate roots.
         let starting_block_number =
             target_block.checked_sub(self.config.driver.block_interval).ok_or_else(|| {
                 SubmitAction::Failed(ProposerError::Internal(format!(
@@ -1267,13 +1220,34 @@ where
             .extract_intermediate_roots(starting_block_number, proposals, &intermediate_blocks)
             .map_err(SubmitAction::Failed)?;
 
-        // Fetch canonical roots for non-target intermediate blocks only;
-        // the target block was already fetched for the JIT check above.
+        // Fetch the JIT canonical root for the target block in parallel with
+        // the non-target intermediate roots — they're independent RPCs and the
+        // happy path needs both.
         let non_target_blocks: Vec<u64> =
             intermediate_blocks.iter().copied().filter(|&b| b != target_block).collect();
+        let (canonical_output, mut canonical_map) = tokio::try_join!(
+            async {
+                self.rollup_client
+                    .output_at_block(target_block)
+                    .await
+                    .map_err(|e| SubmitAction::Failed(ProposerError::Rpc(e)))
+            },
+            async {
+                self.fetch_canonical_roots(&non_target_blocks).await.map_err(SubmitAction::Failed)
+            },
+        )?;
 
-        let mut canonical_map: HashMap<u64, B256> =
-            self.fetch_canonical_roots(non_target_blocks).await.map_err(SubmitAction::Failed)?;
+        if aggregate_proposal.output_root != canonical_output.output_root {
+            warn!(
+                proposal_root = ?aggregate_proposal.output_root,
+                canonical_root = ?canonical_output.output_root,
+                target_block,
+                "Proposal output root does not match canonical chain at submit time"
+            );
+            self.mark_all_platforms_unready();
+            return Err(SubmitAction::RootMismatch);
+        }
+
         canonical_map.insert(target_block, canonical_output.output_root);
 
         for (root, block) in intermediate_roots.iter().zip(intermediate_blocks.iter()) {
@@ -1290,7 +1264,7 @@ where
                     target_block,
                     "Intermediate output root does not match canonical chain at submit time"
                 );
-                self.set_dual_proof_ready(false);
+                self.mark_all_platforms_unready();
                 return Err(SubmitAction::RootMismatch);
             }
         }
@@ -1300,91 +1274,26 @@ where
         // and check `isValidSigner` on-chain. If the signer is invalid, skip
         // submission to avoid wasting gas on a transaction that will revert.
         if let Some(registry_address) = self.config.tee_prover_registry_address {
-            for platform_proof in proof_result.platform_proofs() {
-                let (platform_aggregate, _) = platform_proof.proposals();
-                match self
-                    .check_signer_validity(
-                        platform_proof.platform,
-                        platform_aggregate,
-                        starting_block_number,
-                        &intermediate_roots,
-                        registry_address,
-                    )
-                    .await
-                {
-                    Ok(SignerValidity::Valid) => {
-                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(1.0);
-                    }
-                    Ok(SignerValidity::Invalid { signer }) => {
-                        self.set_ready(false);
-                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(0.0);
-                        Metrics::tee_platform_signer_invalid_total(platform_proof.platform.label())
-                            .increment(1);
-                        Metrics::tee_signer_invalid_total().increment(1);
-                        warn!(
-                            platform = platform_proof.platform.label(),
-                            signer = %signer,
-                            target_block,
-                            "TEE signer is invalid on-chain, discarding proof"
-                        );
-                        return Err(SubmitAction::Discard(ProposerError::Internal(format!(
-                            "{} TEE signer invalid on-chain",
-                            platform_proof.platform
-                        ))));
-                    }
-                    Ok(SignerValidity::NotRegistered { signer }) => {
-                        self.set_ready(false);
-                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(0.0);
-                        Metrics::tee_platform_signer_invalid_total(platform_proof.platform.label())
-                            .increment(1);
-                        Metrics::tee_signer_invalid_total().increment(1);
-                        warn!(
-                            platform = platform_proof.platform.label(),
-                            signer = %signer,
-                            target_block,
-                            "TEE signer is not registered on-chain, discarding proof"
-                        );
-                        return Err(SubmitAction::Discard(ProposerError::Internal(format!(
-                            "{} TEE signer not registered on-chain",
-                            platform_proof.platform
-                        ))));
-                    }
-                    Ok(SignerValidity::WrongImageHash {
-                        signer,
-                        signer_image_hash,
-                        expected_image_hash,
-                    }) => {
-                        self.set_ready(false);
-                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(0.0);
-                        Metrics::tee_platform_signer_invalid_total(platform_proof.platform.label())
-                            .increment(1);
-                        Metrics::tee_signer_invalid_total().increment(1);
-                        warn!(
-                            platform = platform_proof.platform.label(),
-                            signer = %signer,
-                            signer_image_hash = %signer_image_hash,
-                            expected_image_hash = %expected_image_hash,
-                            target_block,
-                            "TEE signer is registered with the wrong image hash, discarding proof"
-                        );
-                        return Err(SubmitAction::Discard(ProposerError::Internal(format!(
-                            "{} TEE signer registered with wrong image hash: signer_image_hash={}, expected_image_hash={}",
-                            platform_proof.platform, signer_image_hash, expected_image_hash
-                        ))));
-                    }
-                    Err(e) => {
-                        self.set_ready(false);
-                        Metrics::tee_platform_ready(platform_proof.platform.label()).set(0.0);
-                        warn!(
-                            error = %e,
-                            platform = platform_proof.platform.label(),
-                            target_block,
-                            "signer validity check failed, retrying submission"
-                        );
-                        return Err(SubmitAction::Failed(e));
-                    }
-                }
-            }
+            let (nitro_aggregate, _) = proof_result.nitro.proposals();
+            let (tdx_aggregate, _) = proof_result.tdx.proposals();
+            let (nitro_res, tdx_res) = tokio::join!(
+                self.check_signer_validity(
+                    proof_result.nitro.platform,
+                    nitro_aggregate,
+                    starting_block_number,
+                    &intermediate_roots,
+                    registry_address,
+                ),
+                self.check_signer_validity(
+                    proof_result.tdx.platform,
+                    tdx_aggregate,
+                    starting_block_number,
+                    &intermediate_roots,
+                    registry_address,
+                ),
+            );
+            self.process_signer_validity(proof_result.nitro.platform, nitro_res, target_block)?;
+            self.process_signer_validity(proof_result.tdx.platform, tdx_res, target_block)?;
             self.set_ready(true);
         }
 
