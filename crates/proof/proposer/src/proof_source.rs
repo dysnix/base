@@ -41,26 +41,22 @@ impl fmt::Display for TeeProofPlatform {
 pub struct PlatformProof {
     /// Platform that produced the proof.
     pub platform: TeeProofPlatform,
-    /// Raw proof result returned by the platform prover.
-    pub result: ProofResult,
+    /// Aggregate proposal signed by the platform prover.
+    pub aggregate_proposal: Proposal,
+    /// Per-block proposals signed by the platform prover.
+    pub proposals: Vec<Proposal>,
 }
 
 impl PlatformProof {
     /// Creates a platform proof and rejects non-TEE prover responses.
     pub fn new(platform: TeeProofPlatform, result: ProofResult) -> Result<Self, ProposerError> {
-        match &result {
-            ProofResult::Tee { .. } => Ok(Self { platform, result }),
+        match result {
+            ProofResult::Tee { aggregate_proposal, proposals } => {
+                Ok(Self { platform, aggregate_proposal, proposals })
+            }
             ProofResult::Zk { .. } => Err(ProposerError::Prover(format!(
                 "{platform} prover returned unexpected ZK proof result"
             ))),
-        }
-    }
-
-    /// Returns the aggregate and per-block proposals for this TEE proof.
-    pub fn proposals(&self) -> (&Proposal, &[Proposal]) {
-        match &self.result {
-            ProofResult::Tee { aggregate_proposal, proposals } => (aggregate_proposal, proposals),
-            ProofResult::Zk { .. } => unreachable!("PlatformProof rejects ZK results"),
         }
     }
 }
@@ -77,19 +73,6 @@ pub struct DualPlatformProof {
 impl DualPlatformProof {
     /// Creates a paired proof after verifying both platforms signed the same proposal data.
     pub fn new(nitro: PlatformProof, tdx: PlatformProof) -> Result<Self, ProposerError> {
-        if nitro.platform != TeeProofPlatform::Nitro {
-            return Err(ProposerError::Prover(format!(
-                "expected nitro proof, got {} proof",
-                nitro.platform
-            )));
-        }
-        if tdx.platform != TeeProofPlatform::Tdx {
-            return Err(ProposerError::Prover(format!(
-                "expected tdx proof, got {} proof",
-                tdx.platform
-            )));
-        }
-
         let proof = Self { nitro, tdx };
         proof.validate_matching_payloads()?;
         Ok(proof)
@@ -101,8 +84,8 @@ impl DualPlatformProof {
     }
 
     /// Returns every platform proof that was actually sourced.
-    pub fn platform_proofs(&self) -> impl Iterator<Item = &PlatformProof> {
-        [&self.nitro, &self.tdx].into_iter()
+    pub const fn platform_proofs(&self) -> [&PlatformProof; 2] {
+        [&self.nitro, &self.tdx]
     }
 
     /// Builds the proof bytes submitted to `AggregateVerifier.initializeWithInitData()`.
@@ -110,8 +93,8 @@ impl DualPlatformProof {
     /// The proof layout is:
     /// `proofType(1) || l1OriginHash(32) || l1OriginNumber(32) || nitroSignature(65) || tdxSignature(65)`.
     pub fn build_proof_data(&self) -> Result<Bytes, CryptoError> {
-        let (nitro_aggregate, _) = self.nitro.proposals();
-        let (tdx_aggregate, _) = self.tdx.proposals();
+        let nitro_aggregate = &self.nitro.aggregate_proposal;
+        let tdx_aggregate = &self.tdx.aggregate_proposal;
 
         ProofEncoder::encode_dual_tee_proof_bytes(
             &nitro_aggregate.signature,
@@ -123,30 +106,27 @@ impl DualPlatformProof {
 
     /// Ensures configured platform proofs are for the same proposal input.
     pub fn validate_matching_payloads(&self) -> Result<(), ProposerError> {
-        let (nitro_aggregate, nitro_proposals) = self.nitro.proposals();
-        let (tdx_aggregate, tdx_proposals) = self.tdx.proposals();
-
         Self::validate_matching_proposal_payload(
-            nitro_aggregate,
-            tdx_aggregate,
-            "aggregate proposal",
+            &self.nitro.aggregate_proposal,
+            &self.tdx.aggregate_proposal,
+            ProposalLabel::Aggregate,
         )?;
 
-        if nitro_proposals.len() != tdx_proposals.len() {
+        if self.nitro.proposals.len() != self.tdx.proposals.len() {
             return Err(ProposerError::Prover(format!(
                 "nitro and tdx proof proposal counts differ: nitro={}, tdx={}",
-                nitro_proposals.len(),
-                tdx_proposals.len()
+                self.nitro.proposals.len(),
+                self.tdx.proposals.len()
             )));
         }
 
         for (index, (nitro_proposal, tdx_proposal)) in
-            nitro_proposals.iter().zip(tdx_proposals.iter()).enumerate()
+            self.nitro.proposals.iter().zip(self.tdx.proposals.iter()).enumerate()
         {
             Self::validate_matching_proposal_payload(
                 nitro_proposal,
                 tdx_proposal,
-                &format!("proposal {index}"),
+                ProposalLabel::Block(index),
             )?;
         }
 
@@ -156,7 +136,7 @@ impl DualPlatformProof {
     fn validate_matching_proposal_payload(
         nitro: &Proposal,
         tdx: &Proposal,
-        label: &str,
+        label: ProposalLabel,
     ) -> Result<(), ProposerError> {
         if nitro.output_root != tdx.output_root
             || nitro.l1_origin_hash != tdx.l1_origin_hash
@@ -171,6 +151,21 @@ impl DualPlatformProof {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ProposalLabel {
+    Aggregate,
+    Block(usize),
+}
+
+impl fmt::Display for ProposalLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Aggregate => f.write_str("aggregate proposal"),
+            Self::Block(index) => write!(f, "proposal {index}"),
+        }
     }
 }
 
@@ -209,16 +204,16 @@ pub enum TeeProofError {
 
 impl TeeProofError {
     /// Returns the platform readiness implied by this error.
-    pub fn platform_readiness(&self) -> Vec<(TeeProofPlatform, bool)> {
+    pub const fn platform_readiness(&self) -> [(TeeProofPlatform, bool); 2] {
         match self {
             Self::Platform { platform: TeeProofPlatform::Nitro, .. } => {
-                vec![(TeeProofPlatform::Nitro, false), (TeeProofPlatform::Tdx, true)]
+                [(TeeProofPlatform::Nitro, false), (TeeProofPlatform::Tdx, true)]
             }
             Self::Platform { platform: TeeProofPlatform::Tdx, .. } => {
-                vec![(TeeProofPlatform::Nitro, true), (TeeProofPlatform::Tdx, false)]
+                [(TeeProofPlatform::Nitro, true), (TeeProofPlatform::Tdx, false)]
             }
             Self::BothPlatforms { .. } | Self::PayloadMismatch { .. } | Self::Other { .. } => {
-                vec![(TeeProofPlatform::Nitro, false), (TeeProofPlatform::Tdx, false)]
+                [(TeeProofPlatform::Nitro, false), (TeeProofPlatform::Tdx, false)]
             }
         }
     }
@@ -396,8 +391,8 @@ mod tests {
         assert_eq!(nitro_calls.load(Ordering::SeqCst), 1);
         assert_eq!(tdx_calls.load(Ordering::SeqCst), 1);
         assert_eq!(
-            proof.platform_proofs().map(|proof| proof.platform).collect::<Vec<_>>(),
-            vec![TeeProofPlatform::Nitro, TeeProofPlatform::Tdx]
+            proof.platform_proofs().map(|proof| proof.platform),
+            [TeeProofPlatform::Nitro, TeeProofPlatform::Tdx]
         );
     }
 
@@ -417,7 +412,7 @@ mod tests {
         assert!(matches!(error, TeeProofError::Platform { platform: TeeProofPlatform::Tdx, .. }));
         assert_eq!(
             error.platform_readiness(),
-            vec![(TeeProofPlatform::Nitro, true), (TeeProofPlatform::Tdx, false)]
+            [(TeeProofPlatform::Nitro, true), (TeeProofPlatform::Tdx, false)]
         );
     }
 }

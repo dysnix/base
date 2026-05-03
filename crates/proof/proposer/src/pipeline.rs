@@ -1205,7 +1205,8 @@ where
         parent_address: Address,
     ) -> Result<(), SubmitAction> {
         let submission_proof = proof_result.submission_proof();
-        let (aggregate_proposal, proposals) = submission_proof.proposals();
+        let aggregate_proposal = &submission_proof.aggregate_proposal;
+        let proposals = &submission_proof.proposals;
 
         let starting_block_number =
             target_block.checked_sub(self.config.driver.block_interval).ok_or_else(|| {
@@ -1274,8 +1275,8 @@ where
         // and check `isValidSigner` on-chain. If the signer is invalid, skip
         // submission to avoid wasting gas on a transaction that will revert.
         if let Some(registry_address) = self.config.tee_prover_registry_address {
-            let (nitro_aggregate, _) = proof_result.nitro.proposals();
-            let (tdx_aggregate, _) = proof_result.tdx.proposals();
+            let nitro_aggregate = &proof_result.nitro.aggregate_proposal;
+            let tdx_aggregate = &proof_result.tdx.aggregate_proposal;
             let (nitro_res, tdx_res) = tokio::join!(
                 self.check_signer_validity(
                     proof_result.nitro.platform,
@@ -2599,8 +2600,8 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert!(calls.contains(&(TeeProofPlatform::Nitro, request.clone())));
         assert!(calls.contains(&(TeeProofPlatform::Tdx, request)));
-        let (nitro_aggregate, _) = proof.nitro.proposals();
-        let (tdx_aggregate, _) = proof.tdx.proposals();
+        let nitro_aggregate = &proof.nitro.aggregate_proposal;
+        let tdx_aggregate = &proof.tdx.aggregate_proposal;
         assert_ne!(nitro_aggregate.signature, tdx_aggregate.signature);
         assert_eq!(nitro_aggregate.output_root, tdx_aggregate.output_root);
         assert_eq!(nitro_aggregate.l2_block_number, tdx_aggregate.l2_block_number);
