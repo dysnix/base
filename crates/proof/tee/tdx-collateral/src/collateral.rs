@@ -28,7 +28,7 @@ use x509_parser::{
     prelude::FromDer,
 };
 
-use crate::{Result, TdxAttestationConfig, TdxCollateralError, build_tdx_collateral_http_client};
+use crate::{Result, TdxAttestationConfig, TdxCollateralError};
 
 /// Maximum allowed Intel PCS response size.
 pub const MAX_TDX_COLLATERAL_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
@@ -190,8 +190,7 @@ pub struct TdxAttestationHydrator {
 impl TdxAttestationHydrator {
     /// Creates a hydrator with a hardened HTTP client.
     pub fn new(config: TdxAttestationConfig) -> Result<Self> {
-        let client = build_tdx_collateral_http_client(config.fetch_timeout)
-            .map_err(|e| TdxCollateralError::source(Box::new(e)))?;
+        let client = config.build_http_client()?;
         Ok(Self { config, client, cache: Arc::new(Mutex::new(TdxCollateralCache::default())) })
     }
 

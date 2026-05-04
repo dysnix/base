@@ -4,7 +4,7 @@
 mod config;
 pub use config::{
     DEFAULT_TDX_COLLATERAL_FETCH_TIMEOUT_SECS, DEFAULT_TDX_MAX_QUOTE_AGE_SECS,
-    DEFAULT_TDX_TRUSTED_ROOT_CA_HASH, TdxAttestationConfig, build_tdx_collateral_http_client,
+    DEFAULT_TDX_TRUSTED_ROOT_CA_HASH, TdxAttestationConfig,
 };
 
 mod error;

@@ -36,20 +36,26 @@ pub struct TdxAttestationConfig {
 
 impl std::fmt::Debug for TdxAttestationConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let allowed_tcb_statuses =
-            self.allowed_tcb_statuses.iter().map(|status| *status as u8).collect::<Vec<_>>();
+        // `TDXTcbStatus` is a `sol!`-generated enum without a `Debug` impl, so
+        // render it as the on-chain numeric discriminant.
+        struct Statuses<'a>(&'a [TDXTcbStatus]);
+        impl std::fmt::Debug for Statuses<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_list().entries(self.0.iter().map(|s| *s as u8)).finish()
+            }
+        }
         f.debug_struct("TdxAttestationConfig")
-            .field("pcs_tdx_base_url", &self.pcs_tdx_base_url.origin().unicode_serialization())
+            .field("pcs_tdx_base_url", &self.pcs_tdx_base_url)
             .field("trusted_root_ca_hash", &self.trusted_root_ca_hash)
             .field("max_quote_age", &self.max_quote_age)
-            .field("allowed_tcb_statuses", &allowed_tcb_statuses)
+            .field("allowed_tcb_statuses", &Statuses(&self.allowed_tcb_statuses))
             .field("fetch_timeout", &self.fetch_timeout)
             .finish()
     }
 }
 
 impl TdxAttestationConfig {
-    /// Returns the default Intel PCS TDX attestation hydration configuration.
+    /// Production Intel PCS v4 endpoint with `UpToDate`-only TCB policy.
     pub fn intel_pcs() -> Self {
         Self {
             pcs_tdx_base_url: Url::parse(
@@ -62,13 +68,13 @@ impl TdxAttestationConfig {
             fetch_timeout: Duration::from_secs(DEFAULT_TDX_COLLATERAL_FETCH_TIMEOUT_SECS),
         }
     }
-}
 
-/// Creates an HTTP client configured for bounded TDX collateral fetching.
-pub fn build_tdx_collateral_http_client(timeout: Duration) -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::limited(3))
-        .build()
-        .map_err(|e| TdxCollateralError::source(Box::new(e)))
+    /// Builds an HTTP client configured for bounded TDX collateral fetching.
+    pub fn build_http_client(&self) -> Result<reqwest::Client> {
+        reqwest::Client::builder()
+            .timeout(self.fetch_timeout)
+            .redirect(reqwest::redirect::Policy::limited(3))
+            .build()
+            .map_err(|e| TdxCollateralError::source(Box::new(e)))
+    }
 }
