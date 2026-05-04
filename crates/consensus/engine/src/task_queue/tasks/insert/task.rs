@@ -13,11 +13,15 @@ use base_common_rpc_types_engine::{
     BaseExecutionPayload, BaseExecutionPayloadEnvelope, BaseExecutionPayloadSidecar,
 };
 use base_protocol::L2BlockInfo;
+use tokio::sync::mpsc;
 
 use crate::{
     EngineClient, EngineState, EngineTaskExt, InsertTaskError, SynchronizeTask,
     state::EngineSyncStateUpdate,
 };
+
+/// Result sent to callers waiting for payload insertion acknowledgement.
+pub type InsertTaskResult = Result<L2BlockInfo, InsertTaskError>;
 
 /// Whether inserting a payload should advance the safe head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +58,8 @@ pub struct InsertTask<EngineClient_: EngineClient> {
     envelope: BaseExecutionPayloadEnvelope,
     /// Whether the inserted payload should advance the safe head.
     payload_safety: InsertPayloadSafety,
+    /// Optional response channel used by callers that need insertion acknowledgement.
+    result_tx: Option<mpsc::Sender<InsertTaskResult>>,
 }
 
 impl<EngineClient_: EngineClient> InsertTask<EngineClient_> {
@@ -64,7 +70,7 @@ impl<EngineClient_: EngineClient> InsertTask<EngineClient_> {
         envelope: BaseExecutionPayloadEnvelope,
         payload_safety: InsertPayloadSafety,
     ) -> Self {
-        Self { client, rollup_config, envelope, payload_safety }
+        Self { client, rollup_config, envelope, payload_safety, result_tx: None }
     }
 
     /// Creates a new task to insert an unsafe payload.
@@ -74,6 +80,22 @@ impl<EngineClient_: EngineClient> InsertTask<EngineClient_> {
         envelope: BaseExecutionPayloadEnvelope,
     ) -> Self {
         Self::new(client, rollup_config, envelope, InsertPayloadSafety::Unsafe)
+    }
+
+    /// Creates a new task to insert an unsafe payload and send insertion acknowledgement.
+    pub fn unsafe_payload_with_result(
+        client: Arc<EngineClient_>,
+        rollup_config: Arc<RollupConfig>,
+        envelope: BaseExecutionPayloadEnvelope,
+        result_tx: Option<mpsc::Sender<InsertTaskResult>>,
+    ) -> Self {
+        Self {
+            client,
+            rollup_config,
+            envelope,
+            payload_safety: InsertPayloadSafety::Unsafe,
+            result_tx,
+        }
     }
 
     /// Creates a new task to insert a safe payload.
@@ -89,15 +111,8 @@ impl<EngineClient_: EngineClient> InsertTask<EngineClient_> {
     const fn check_new_payload_status(&self, status: &PayloadStatusEnum) -> bool {
         matches!(status, PayloadStatusEnum::Valid | PayloadStatusEnum::Syncing)
     }
-}
 
-#[async_trait]
-impl<EngineClient_: EngineClient> EngineTaskExt for InsertTask<EngineClient_> {
-    type Output = ();
-
-    type Error = InsertTaskError;
-
-    async fn execute(&self, state: &mut EngineState) -> Result<(), InsertTaskError> {
+    async fn insert_payload(&self, state: &mut EngineState) -> InsertTaskResult {
         let time_start = Instant::now();
 
         // Insert the new payload and form a block ref from the execution payload.
@@ -182,6 +197,10 @@ impl<EngineClient_: EngineClient> EngineTaskExt for InsertTask<EngineClient_> {
         .execute(state)
         .await?;
 
+        if self.result_tx.is_some() && state.sync_state.unsafe_head() != new_block_ref {
+            return Err(InsertTaskError::ForkchoiceUpdateDidNotAdvance);
+        }
+
         let total_duration = time_start.elapsed();
 
         info!(
@@ -194,7 +213,31 @@ impl<EngineClient_: EngineClient> EngineTaskExt for InsertTask<EngineClient_> {
             "Inserted new payload"
         );
 
-        Ok(())
+        Ok(new_block_ref)
+    }
+
+    async fn send_channel_result(&self, result: InsertTaskResult) {
+        let Some(result_tx) = &self.result_tx else { return };
+        if result_tx.send(result).await.is_err() {
+            warn!(target: "engine", "Sending insert result failed");
+        }
+    }
+}
+
+#[async_trait]
+impl<EngineClient_: EngineClient> EngineTaskExt for InsertTask<EngineClient_> {
+    type Output = ();
+
+    type Error = InsertTaskError;
+
+    async fn execute(&self, state: &mut EngineState) -> Result<(), InsertTaskError> {
+        let result = self.insert_payload(state).await;
+        if self.result_tx.is_some() {
+            self.send_channel_result(result).await;
+            Ok(())
+        } else {
+            result.map(|_| ())
+        }
     }
 }
 
