@@ -3,6 +3,8 @@
 use base_client_cli::P2PArgs;
 use base_common_genesis::RollupConfig;
 
+use crate::bootnode::BootnodeP2PArgs;
+
 /// Metrics to record various CLI options.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliMetrics;
@@ -64,6 +66,9 @@ impl CliMetrics {
 
     /// Top-level rollup config settings.
     pub const ROLLUP_CONFIG: &'static str = "base_node_rollup_config";
+
+    /// Whether the consensus bootnode is up.
+    pub const BOOTNODE_UP: &'static str = "base_node_bootnode_up";
 }
 
 /// Initializes metrics for the P2P configuration.
@@ -100,6 +105,30 @@ pub fn init_p2p_metrics(p2p: &P2PArgs) {
         ]
     )
     .set(1.0);
+}
+
+/// Initializes metrics for the bootnode P2P discovery configuration.
+pub fn init_bootnode_p2p_metrics(p2p: &BootnodeP2PArgs) {
+    metrics::describe_gauge!(
+        CliMetrics::IDENTIFIER,
+        "P2P discovery configuration settings for the Base consensus bootnode"
+    );
+    metrics::describe_gauge!(CliMetrics::BOOTNODE_UP, "Whether the Base consensus bootnode is up");
+    metrics::gauge!(
+        CliMetrics::IDENTIFIER,
+        &[
+            (CliMetrics::P2P_DISCOVERY_INTERVAL, p2p.discovery_interval.to_string()),
+            (CliMetrics::P2P_ADVERTISE_IP, p2p.advertised_ip().to_string()),
+            (CliMetrics::P2P_ADVERTISE_TCP_PORT, p2p.advertised_tcp_port().to_string()),
+            (CliMetrics::P2P_ADVERTISE_UDP_PORT, p2p.advertised_udp_port().to_string()),
+        ]
+    )
+    .set(1.0);
+}
+
+/// Records that the bootnode finished startup.
+pub fn record_bootnode_up() {
+    metrics::gauge!(CliMetrics::BOOTNODE_UP).set(1.0);
 }
 
 /// Initializes metrics for the rollup config.

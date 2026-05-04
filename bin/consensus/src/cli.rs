@@ -21,6 +21,7 @@ use strum::IntoEnumIterator;
 use tracing::{error, info, warn};
 use url::Url;
 
+use crate::bootnode::Bootnode;
 use crate::metrics::{init_p2p_metrics, init_rollup_config_metrics};
 
 base_cli_utils::define_log_args!("BASE_NODE");
@@ -47,6 +48,7 @@ impl Cli {
         match self.command {
             Commands::Node(node) => node.run(),
             Commands::Follow(follow) => follow.run(),
+            Commands::Bootnode(bootnode) => bootnode.run(),
         }
     }
 }
@@ -62,6 +64,10 @@ pub enum Commands {
     /// Follows another node.
     #[command(name = "follow")]
     Follow(Follow),
+
+    /// Start a discovery-only consensus bootnode.
+    #[command(name = "bootnode")]
+    Bootnode(Bootnode),
 }
 
 /// Follow CLI arguments.
@@ -445,6 +451,13 @@ mod tests {
             sequencer_flags: SequencerArgs::default(),
             safedb_path: None,
         }
+    }
+
+    #[test]
+    fn parses_bootnode_command() {
+        let cli = Cli::parse_from(["base-consensus", "bootnode"]);
+
+        assert!(matches!(cli.command, Commands::Bootnode(_)));
     }
 
     /// Tests that clap correctly wires env vars into the signer fields and that the
