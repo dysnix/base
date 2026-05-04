@@ -6,7 +6,8 @@ use std::{
 use alloy_primitives::{Address, Bytes};
 
 use crate::{
-    Result, SignerIdentity, TdxCollectedQuote, TdxQuoteProvider, TdxReportData, TdxSigner,
+    Result, SignerIdentity, TdxCollectedQuote, TdxLocalQuoteMetadata, TdxQuoteProvider,
+    TdxReportData, TdxSigner,
 };
 
 /// TDX signer quote response.
@@ -23,7 +24,7 @@ pub struct TdxSignerQuote {
     /// Quote collection timestamp in milliseconds.
     pub quote_timestamp_millis: u64,
     /// Provider-local quote metadata.
-    pub local_metadata: crate::TdxLocalQuoteMetadata,
+    pub local_metadata: TdxLocalQuoteMetadata,
 }
 
 /// TDX runtime owning signer identity and quote collection.
@@ -62,6 +63,11 @@ impl<P> TdxRuntime<P> {
     pub const fn quote_provider(&self) -> &P {
         &self.quote_provider
     }
+
+    /// Returns the current Unix timestamp in milliseconds.
+    pub fn now_millis() -> Result<u64> {
+        Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64)
+    }
 }
 
 impl<P: TdxQuoteProvider> TdxRuntime<P> {
@@ -71,9 +77,6 @@ impl<P: TdxQuoteProvider> TdxRuntime<P> {
     }
 
     /// Collects a quote using an explicit timestamp.
-    ///
-    /// This is primarily useful for deterministic tests and replay-safe verifier
-    /// input construction.
     pub fn signer_quote_at(&self, quote_timestamp_millis: u64) -> Result<TdxSignerQuote> {
         let public_key = self.signer.public_key();
         let report_data = TdxReportData::for_public_key(&public_key, quote_timestamp_millis)?;
@@ -87,11 +90,6 @@ impl<P: TdxQuoteProvider> TdxRuntime<P> {
             quote_timestamp_millis,
             local_metadata: metadata,
         })
-    }
-
-    /// Returns the current Unix timestamp in milliseconds.
-    pub fn now_millis() -> Result<u64> {
-        Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64)
     }
 }
 
