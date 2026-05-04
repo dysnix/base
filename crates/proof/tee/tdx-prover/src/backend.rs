@@ -18,20 +18,23 @@ use crate::{Oracle, Result, TdxMeasurements, TdxProverError};
 /// Inputs needed to build a signed aggregate proposal.
 #[derive(Debug)]
 pub struct AggregateProposalInput<'a> {
-    /// Boot info that supplied proposer and interval values.
+    /// Boot info that supplied proposer, L1 origin, and interval values.
     pub boot_info: &'a BootInfo,
     /// Per-block proposals being aggregated.
     pub proposals: &'a [Proposal],
-    /// L1 origin hash shared by the proposals.
-    pub l1_origin_hash: B256,
-    /// L1 origin block number shared by the proposals.
-    pub l1_origin_number: u64,
     /// Agreed output root preceding the aggregate range.
     pub agreed_l2_output_root: B256,
     /// Per-chain config hash.
     pub config_hash: B256,
     /// TDX image hash used in the signed proof journal.
     pub tee_image_hash: B256,
+}
+
+const NO_PROPOSALS_ERR: &str = "no proposals produced";
+const ZERO_L2_BLOCK_ERR: &str = "l2_block_number is 0";
+
+fn pipeline_err(err: impl ToString) -> TdxProverError {
+    TdxProverError::ProofPipeline(err.to_string())
 }
 
 /// Per-chain config hashes derived from [`ChainConfig::all`] at first access.
@@ -88,27 +91,20 @@ impl<P: TdxQuoteProvider> TdxBackend<P> {
         tee_image_hash: B256,
     ) -> Result<ProofResult> {
         let oracle = Oracle::new(preimages)?;
-        let boot_info = BootInfo::load(&oracle)
-            .await
-            .map_err(|error| TdxProverError::ProofPipeline(error.to_string()))?;
+        let boot_info = BootInfo::load(&oracle).await.map_err(pipeline_err)?;
         let config_hash = Self::config_hash_for_chain(boot_info.chain_id)?;
         let agreed_l2_output_root = boot_info.agreed_l2_output_root;
 
         let prologue = Prologue::new(oracle.clone(), oracle, BaseEvmFactory::default());
-        let driver = prologue
-            .load()
-            .await
-            .map_err(|error| TdxProverError::ProofPipeline(error.to_string()))?;
-        let (epilogue, block_results) = driver
-            .execute_with_intermediates()
-            .await
-            .map_err(|error| TdxProverError::ProofPipeline(error.to_string()))?;
+        let driver = prologue.load().await.map_err(pipeline_err)?;
+        let (epilogue, block_results) =
+            driver.execute_with_intermediates().await.map_err(pipeline_err)?;
 
         if block_results.is_empty() {
-            return Err(TdxProverError::ProofPipeline("no proposals produced".into()));
+            return Err(TdxProverError::ProofPipeline(NO_PROPOSALS_ERR.into()));
         }
 
-        epilogue.validate().map_err(|error| TdxProverError::ProofPipeline(error.to_string()))?;
+        epilogue.validate().map_err(pipeline_err)?;
 
         let mut proposals = Vec::with_capacity(block_results.len());
         let mut prev_output_root = agreed_l2_output_root;
@@ -123,7 +119,7 @@ impl<P: TdxQuoteProvider> TdxBackend<P> {
                 prev_output_root,
                 starting_l2_block: l2_block_number
                     .checked_sub(1)
-                    .ok_or_else(|| TdxProverError::ProofPipeline("l2_block_number is 0".into()))?,
+                    .ok_or_else(|| TdxProverError::ProofPipeline(ZERO_L2_BLOCK_ERR.into()))?,
                 output_root: *output_root,
                 ending_l2_block: l2_block_number,
                 intermediate_roots: vec![],
@@ -150,8 +146,6 @@ impl<P: TdxQuoteProvider> TdxBackend<P> {
             self.aggregate_proposal(AggregateProposalInput {
                 boot_info: &boot_info,
                 proposals: &proposals,
-                l1_origin_hash,
-                l1_origin_number,
                 agreed_l2_output_root,
                 config_hash,
                 tee_image_hash,
@@ -166,11 +160,11 @@ impl<P: TdxQuoteProvider> TdxBackend<P> {
         let first = input
             .proposals
             .first()
-            .ok_or_else(|| TdxProverError::ProofPipeline("no proposals produced".into()))?;
+            .ok_or_else(|| TdxProverError::ProofPipeline(NO_PROPOSALS_ERR.into()))?;
         let last = input
             .proposals
             .last()
-            .ok_or_else(|| TdxProverError::ProofPipeline("no proposals produced".into()))?;
+            .ok_or_else(|| TdxProverError::ProofPipeline(NO_PROPOSALS_ERR.into()))?;
 
         let interval = input.boot_info.intermediate_block_interval;
         if interval == 0 {
@@ -183,14 +177,17 @@ impl<P: TdxQuoteProvider> TdxBackend<P> {
         let intermediate_roots: Vec<B256> =
             (1..=count).map(|i| input.proposals[i * interval - 1].output_root).collect();
 
+        let l1_origin_hash = input.boot_info.l1_head;
+        let l1_origin_number = input.boot_info.l1_head_number;
+
         let journal = ProofJournal {
             proposer: input.boot_info.proposer,
-            l1_origin_hash: input.l1_origin_hash,
+            l1_origin_hash,
             prev_output_root: input.agreed_l2_output_root,
             starting_l2_block: first
                 .l2_block_number
                 .checked_sub(1)
-                .ok_or_else(|| TdxProverError::ProofPipeline("l2_block_number is 0".into()))?,
+                .ok_or_else(|| TdxProverError::ProofPipeline(ZERO_L2_BLOCK_ERR.into()))?,
             output_root: last.output_root,
             ending_l2_block: last.l2_block_number,
             intermediate_roots,
@@ -201,8 +198,8 @@ impl<P: TdxQuoteProvider> TdxBackend<P> {
         Ok(Proposal {
             output_root: last.output_root,
             signature: self.sign_proof_journal(&journal)?,
-            l1_origin_hash: input.l1_origin_hash,
-            l1_origin_number: input.l1_origin_number,
+            l1_origin_hash,
+            l1_origin_number,
             l2_block_number: last.l2_block_number,
             prev_output_root: input.agreed_l2_output_root,
             config_hash: input.config_hash,
