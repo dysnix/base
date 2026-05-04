@@ -157,7 +157,6 @@ const proofsSection: SidebarItem = {
     { text: 'Proposer', link: '/protocol/proofs/proposer' },
     { text: 'Registrar', link: '/protocol/proofs/registrar' },
     { text: 'TEE Provers', link: '/protocol/proofs/tee-provers' },
-    { text: 'TDX Deployment', link: '/protocol/proofs/tdx-deployment' },
     { text: 'ZK Provers', link: '/protocol/proofs/zk-provers' },
     { text: 'Contracts', link: '/protocol/proofs/contracts' },
   ],
