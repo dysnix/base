@@ -84,7 +84,14 @@ RISC0_SKIP_BUILD_KERNELS=1 cargo run \
 
 The image ID is a hash of the ELF binary. For the same source code to always
 produce the same image ID, the ELF must be byte-identical across builds.
-Three things ensure this:
+Four things ensure this:
+
+### Single codegen unit
+
+Rust's default release profile uses 16 parallel codegen units. Parallel
+codegen can produce different output depending on thread scheduling, making
+the ELF non-deterministic across machines. `Cargo.toml` sets
+`codegen-units = 1` in the release profile to force single-threaded codegen.
 
 ### Toolchain pinning
 
