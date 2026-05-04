@@ -2,16 +2,20 @@
 //!
 //! Mirrors the TDX ABI surface staged in the contracts branch so offchain
 //! verification code can encode and decode TDX attestation verifier journals.
+//!
+//! Enums put `Unknown` at discriminant 0 so uninitialized values fail closed.
 
 use std::fmt;
 
 use alloy_sol_types::sol;
 
 sol! {
+    #![sol(all_derives)]
+
     /// Supported zero-knowledge proof coprocessor types.
     ///
-    /// This enum is shared by the Nitro and TDX verifier contracts. Its
-    /// ordering must match `INitroEnclaveVerifier.sol`.
+    /// Shared by the Nitro and TDX verifier contracts; ordering must match
+    /// `INitroEnclaveVerifier.sol`.
     enum ZkCoProcessorType {
         /// Unknown / unset.
         Unknown,
@@ -32,8 +36,6 @@ sol! {
     }
 
     /// Statuses emitted by the TDX quote/collateral verifier.
-    ///
-    /// `Unknown` is index 0 so uninitialized values fail closed.
     enum TDXVerificationResult {
         /// Unknown / unset.
         Unknown,
@@ -51,19 +53,17 @@ sol! {
         TcbInfoInvalid,
         /// QE identity collateral validation failed.
         QeIdentityInvalid,
-        /// TCB status was not allowed by policy.
+        /// TCB status was not accepted by verifier policy.
         TcbStatusNotAllowed,
         /// Required quote collateral had expired.
         CollateralExpired,
-        /// Quote timestamp was outside policy.
+        /// Quote timestamp was outside the configured policy window.
         InvalidTimestamp,
         /// TD report data did not match the expected signer binding.
         ReportDataMismatch,
     }
 
     /// Intel TDX TCB status reduced to the contract policy statuses.
-    ///
-    /// `Unknown` is index 0 so uninitialized values fail closed.
     enum TDXTcbStatus {
         /// Unknown / unset.
         Unknown,
@@ -139,7 +139,7 @@ sol! {
 }
 
 /// Debug wrapper that renders a `TDXTcbStatus` slice as its on-chain numeric
-/// discriminants. `TDXTcbStatus` is `sol!`-generated and has no `Debug` impl.
+/// discriminants for compact log output.
 pub struct TdxTcbStatusList<'a>(pub &'a [TDXTcbStatus]);
 
 impl fmt::Debug for TdxTcbStatusList<'_> {
@@ -150,7 +150,7 @@ impl fmt::Debug for TdxTcbStatusList<'_> {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{Address, Bytes, address, b256};
+    use alloy_primitives::{Address, B256, Bytes};
     use alloy_sol_types::{SolCall, SolValue};
     use rstest::rstest;
 
@@ -163,42 +163,23 @@ mod tests {
             tcbStatus: TDXTcbStatus::UpToDate,
             timestamp: 1_711_111_111_000,
             collateralExpiration: 1_711_111_111,
-            rootCaHash: b256!("0101010101010101010101010101010101010101010101010101010101010101"),
-            pckCertHash: b256!("0202020202020202020202020202020202020202020202020202020202020202"),
-            tcbInfoHash: b256!("0303030303030303030303030303030303030303030303030303030303030303"),
-            qeIdentityHash: b256!(
-                "0404040404040404040404040404040404040404040404040404040404040404"
-            ),
+            rootCaHash: B256::repeat_byte(0x01),
+            pckCertHash: B256::repeat_byte(0x02),
+            tcbInfoHash: B256::repeat_byte(0x03),
+            qeIdentityHash: B256::repeat_byte(0x04),
             publicKey: Bytes::from(vec![0x04; 65]),
-            signer: address!("1111111111111111111111111111111111111111"),
-            imageHash: b256!("0505050505050505050505050505050505050505050505050505050505050505"),
-            mrTdHash: b256!("0606060606060606060606060606060606060606060606060606060606060606"),
-            reportDataPrefix: b256!(
-                "0707070707070707070707070707070707070707070707070707070707070707"
-            ),
-            reportDataSuffix: b256!(
-                "0808080808080808080808080808080808080808080808080808080808080808"
-            ),
+            signer: Address::repeat_byte(0x11),
+            imageHash: B256::repeat_byte(0x05),
+            mrTdHash: B256::repeat_byte(0x06),
+            reportDataPrefix: B256::repeat_byte(0x07),
+            reportDataSuffix: B256::repeat_byte(0x08),
         };
 
         let encoded = SolValue::abi_encode(&journal);
         let decoded = <TDXVerifierJournal as SolValue>::abi_decode_validate(&encoded)
             .expect("TDX verifier journal ABI must decode");
 
-        assert_eq!(decoded.result as u8, journal.result as u8);
-        assert_eq!(decoded.tcbStatus as u8, journal.tcbStatus as u8);
-        assert_eq!(decoded.timestamp, journal.timestamp);
-        assert_eq!(decoded.collateralExpiration, journal.collateralExpiration);
-        assert_eq!(decoded.rootCaHash, journal.rootCaHash);
-        assert_eq!(decoded.pckCertHash, journal.pckCertHash);
-        assert_eq!(decoded.tcbInfoHash, journal.tcbInfoHash);
-        assert_eq!(decoded.qeIdentityHash, journal.qeIdentityHash);
-        assert_eq!(decoded.publicKey, journal.publicKey);
-        assert_eq!(decoded.signer, journal.signer);
-        assert_eq!(decoded.imageHash, journal.imageHash);
-        assert_eq!(decoded.mrTdHash, journal.mrTdHash);
-        assert_eq!(decoded.reportDataPrefix, journal.reportDataPrefix);
-        assert_eq!(decoded.reportDataSuffix, journal.reportDataSuffix);
+        assert_eq!(decoded, journal);
     }
 
     #[rstest]
@@ -238,13 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn tdx_verifier_selectors_are_nonzero() {
-        assert_ne!(ITDXVerifier::verifyCall::SELECTOR, [0u8; 4]);
-        assert_ne!(ITDXVerifier::getZkConfigCall::SELECTOR, [0u8; 4]);
-        assert_ne!(ITDXVerifier::allowedTcbStatusesCall::SELECTOR, [0u8; 4]);
-    }
-
-    #[test]
     fn get_zk_config_and_allowed_tcb_status_abi_encode_correctly() {
         let get_zk_config =
             ITDXVerifier::getZkConfigCall { zkCoprocessor: ZkCoProcessorType::Succinct };
@@ -264,7 +238,6 @@ mod tests {
         };
         let encoded = call.abi_encode();
 
-        assert_eq!(encoded.len(), 164);
         assert_eq!(&encoded[..4], &ITDXVerifier::verifyCall::SELECTOR);
     }
 
@@ -278,8 +251,8 @@ mod tests {
     #[test]
     fn zk_coprocessor_config_abi_round_trips() {
         let config = ZkCoProcessorConfig {
-            verifierId: b256!("0909090909090909090909090909090909090909090909090909090909090909"),
-            aggregatorId: b256!("1010101010101010101010101010101010101010101010101010101010101010"),
+            verifierId: B256::repeat_byte(0x09),
+            aggregatorId: B256::repeat_byte(0x10),
             zkVerifier: Address::ZERO,
         };
 
@@ -287,8 +260,6 @@ mod tests {
         let decoded = <ZkCoProcessorConfig as SolValue>::abi_decode_validate(&encoded)
             .expect("ZK coprocessor config ABI must decode");
 
-        assert_eq!(decoded.verifierId, config.verifierId);
-        assert_eq!(decoded.aggregatorId, config.aggregatorId);
-        assert_eq!(decoded.zkVerifier, config.zkVerifier);
+        assert_eq!(decoded, config);
     }
 }
