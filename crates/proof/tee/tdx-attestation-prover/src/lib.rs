@@ -23,11 +23,6 @@ mod recovery;
 pub use recovery::RecoveredProofPolicy;
 
 #[cfg(feature = "prove")]
-mod risc_zero;
-#[cfg(feature = "prove")]
-pub use risc_zero::RiscZeroProver;
-
-#[cfg(feature = "prove")]
 mod boundless;
 #[cfg(feature = "prove")]
 pub use boundless::{BoundlessClient, BoundlessProver};

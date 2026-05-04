@@ -111,11 +111,6 @@ pub enum ProvingConfig {
 pub enum TdxProvingConfig {
     /// Native direct verification for local development and mock contracts.
     Direct,
-    /// RISC Zero proving via `risc0_zkvm::default_prover()`.
-    RiscZero {
-        /// Path to the TDX verifier guest ELF binary on disk.
-        elf_path: PathBuf,
-    },
     /// RISC Zero proving through the Boundless marketplace.
     Boundless(Box<TdxBoundlessConfig>),
 }
@@ -124,9 +119,6 @@ impl std::fmt::Debug for TdxProvingConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Direct => f.write_str("Direct"),
-            Self::RiscZero { elf_path } => {
-                f.debug_struct("RiscZero").field("elf_path", elf_path).finish()
-            }
             Self::Boundless(config) => f.debug_tuple("Boundless").field(config).finish(),
         }
     }

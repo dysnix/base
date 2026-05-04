@@ -5356,7 +5356,6 @@ dependencies = [
  "base-proof-tee-attestation",
  "base-proof-tee-tdx-verifier",
  "boundless-market",
- "risc0-ethereum-contracts",
  "risc0-zkvm",
  "rstest",
  "thiserror 2.0.18",

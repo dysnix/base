@@ -31,7 +31,6 @@ use base_proof_tee_registrar::{
 };
 use base_proof_tee_tdx_attestation_prover::{
     BoundlessProver as TdxBoundlessProver, DirectProver as TdxDirectProver, RecoveredProofPolicy,
-    RiscZeroProver as TdxRiscZeroProver,
 };
 use base_proof_tee_tdx_collateral::{DEFAULT_TDX_MAX_QUOTE_AGE_SECS, TdxAttestationConfig};
 use base_proof_tee_tdx_verifier::TDXTcbStatus;
@@ -302,10 +301,6 @@ struct TdxArgs {
     #[arg(long, env = cli_env!("TDX_IMAGE_ID"))]
     tdx_image_id: Option<String>,
 
-    /// TDX verifier guest ELF path for RISC Zero local proving.
-    #[arg(long, env = cli_env!("TDX_ELF_PATH"))]
-    tdx_elf_path: Option<PathBuf>,
-
     /// TDX Boundless Network RPC URL.
     #[arg(long, env = cli_env!("TDX_BOUNDLESS_RPC_URL"))]
     tdx_boundless_rpc_url: Option<Url>,
@@ -438,8 +433,6 @@ impl TdxTcbStatusArg {
 pub(crate) enum TdxProvingMode {
     /// Native direct verification for local development and mock contracts.
     Direct,
-    /// RISC Zero proving via `risc0_zkvm::default_prover()`.
-    RiscZero,
     /// Boundless marketplace proving for RISC Zero proofs.
     Boundless,
 }
@@ -575,15 +568,6 @@ fn build_proof_provider(
         }
         PlatformProvingConfig::Tdx(TdxProvingConfig::Direct) => {
             Ok(Box::new(TdxDirectProver::new()))
-        }
-        PlatformProvingConfig::Tdx(TdxProvingConfig::RiscZero { elf_path }) => {
-            let elf = std::fs::read(elf_path).map_err(|e| {
-                RegistrarError::Config(format!("failed to read ELF at {}: {e}", elf_path.display()))
-            })?;
-            let prover = TdxRiscZeroProver::new(elf).map_err(|e| {
-                RegistrarError::Config(format!("failed to create TDX RISC Zero prover: {e}"))
-            })?;
-            Ok(Box::new(prover))
         }
         PlatformProvingConfig::Tdx(TdxProvingConfig::Boundless(boundless)) => {
             Ok(Box::new(TdxBoundlessProver {
@@ -801,7 +785,6 @@ impl Cli {
             || !self.tdx_prover_endpoint.is_empty()
             || self.tdx.tdx_proving_mode.is_some()
             || self.tdx.tdx_image_id.is_some()
-            || self.tdx.tdx_elf_path.is_some()
             || self.tdx.tdx_boundless_rpc_url.is_some()
             || self.tdx.tdx_boundless_private_key.is_some()
             || self.tdx.tdx_boundless_verifier_program_url.is_some()
@@ -852,14 +835,6 @@ impl Cli {
         })?;
         match mode {
             TdxProvingMode::Direct => Ok(TdxProvingConfig::Direct),
-            TdxProvingMode::RiscZero => {
-                let elf_path = self.tdx.tdx_elf_path.clone().ok_or_else(|| {
-                    RegistrarError::Config(
-                        "--tdx-elf-path is required for TDX RISC Zero proving".into(),
-                    )
-                })?;
-                Ok(TdxProvingConfig::RiscZero { elf_path })
-            }
             TdxProvingMode::Boundless => {
                 if self.tdx.tdx_boundless_timeout_secs == 0 {
                     return Err(RegistrarError::Config(
@@ -956,8 +931,7 @@ impl Cli {
                         Some((SignerAttestationKind::Tdx, b.signer.address(), &b.rpc_url))
                     }
                     PlatformProvingConfig::Nitro(ProvingConfig::Direct { .. })
-                    | PlatformProvingConfig::Tdx(TdxProvingConfig::Direct)
-                    | PlatformProvingConfig::Tdx(TdxProvingConfig::RiscZero { .. }) => None,
+                    | PlatformProvingConfig::Tdx(TdxProvingConfig::Direct) => None,
                 };
                 if let Some((kind, addr, rpc)) = boundless {
                     start_boundless_balance_monitor(kind, addr, rpc.clone(), cancel.clone());
@@ -1303,26 +1277,6 @@ mod tests {
         assert_eq!(discovery.target_group_arn, TEST_TDX_TARGET_GROUP_ARN);
         assert_eq!(discovery.aws_region, TEST_AWS_REGION);
         assert_eq!(discovery.port, 9000);
-    }
-
-    #[rstest]
-    fn tdx_risc_zero_config_parses() {
-        let mut args = boundless_args();
-        args.extend([
-            "--tdx-prover-endpoint",
-            TEST_TDX_ENDPOINT,
-            "--tdx-proving-mode",
-            "risc-zero",
-            "--tdx-elf-path",
-            TEST_ELF_PATH,
-        ]);
-
-        let config = Cli::parse_from(args).into_config().unwrap();
-
-        assert!(matches!(
-            tdx_fleet(&config).proving,
-            PlatformProvingConfig::Tdx(TdxProvingConfig::RiscZero { .. })
-        ));
     }
 
     #[rstest]
