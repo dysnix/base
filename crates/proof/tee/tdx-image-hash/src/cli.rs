@@ -39,20 +39,20 @@ pub struct Cli {
 impl Cli {
     /// Runs the command and prints the inspection report.
     pub async fn run(self) -> Result<()> {
-        let report = TdxImageHashTool::run(self.config()?).await?;
+        let report = TdxImageHashTool::run(self.config()).await?;
         println!("{report}");
         Ok(())
     }
 
     /// Converts parsed CLI arguments into the library configuration.
-    pub fn config(&self) -> Result<crate::TdxImageHashConfig> {
-        Ok(crate::TdxImageHashConfig {
+    pub fn config(&self) -> crate::TdxImageHashConfig {
+        crate::TdxImageHashConfig {
             endpoint: self.endpoint.clone(),
             signer_index: self.signer_index,
             verify_quote: self.verify_quote,
-            attestation: self.collateral.config()?,
+            attestation: self.collateral.config(),
             registry: self.registry.config(),
-        })
+        }
     }
 }
 
@@ -82,7 +82,7 @@ pub struct CollateralArgs {
 
 impl CollateralArgs {
     /// Builds the registrar-compatible TDX attestation configuration.
-    pub fn config(&self) -> Result<TdxAttestationConfig> {
+    pub fn config(&self) -> TdxAttestationConfig {
         let mut config = TdxAttestationConfig::intel_pcs();
         if let Some(pcs_tdx_base_url) = &self.pcs_tdx_base_url {
             config.pcs_tdx_base_url = pcs_tdx_base_url.clone();
@@ -100,7 +100,7 @@ impl CollateralArgs {
         if let Some(fetch_timeout_secs) = self.fetch_timeout_secs {
             config.fetch_timeout = Duration::from_secs(fetch_timeout_secs);
         }
-        Ok(config)
+        config
     }
 }
 
@@ -177,7 +177,7 @@ mod tests {
             "http://127.0.0.1:7310",
         ]);
 
-        let config = cli.collateral.config().unwrap();
+        let config = cli.collateral.config();
 
         assert_eq!(config.trusted_root_ca_hash, DEFAULT_TDX_TRUSTED_ROOT_CA_HASH);
         assert_eq!(
@@ -215,7 +215,7 @@ mod tests {
             "sw-hardening-needed",
         ]);
 
-        let config = cli.collateral.config().unwrap();
+        let config = cli.collateral.config();
 
         assert_eq!(
             config.allowed_tcb_statuses.iter().map(|status| *status as u8).collect::<Vec<_>>(),
