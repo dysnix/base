@@ -13,7 +13,7 @@ mod error;
 pub use error::L1WatcherActorError;
 
 mod fetcher;
-pub use fetcher::{AlloyL1BlockFetcher, L1BlockFetcher};
+pub use fetcher::{AlloyL1BlockFetcher, AlloyL1BlockFetcherError, L1BlockFetcher};
 
 mod query_processor;
 pub use query_processor::{L1WatcherQueryExecutor, L1WatcherQueryProcessor};

@@ -73,6 +73,10 @@ impl LogRetrier {
                         attempt,
                         "Failed to fetch logs for L1 head"
                     );
+                    if !provider.should_retry_get_logs_error(&e) {
+                        return Err(L1WatcherActorError::Fetcher(e.to_string()));
+                    }
+
                     if attempt < MAX_RETRIES {
                         select! {
                             _ = cancel.cancelled() => return Ok(None),
@@ -350,25 +354,34 @@ mod tests {
     type BoxedBlockStream = Pin<Box<dyn Stream<Item = BlockInfo> + Unpin + Send>>;
 
     // ---------------------------------------------------------------------------
-    // Mock L1BlockFetcher used by LogRetrier tests (unchanged)
+    // Mock L1BlockFetcher used by LogRetrier tests
     // ---------------------------------------------------------------------------
 
     struct MockFetcher {
         call_count: Arc<AtomicU32>,
         fail_count: u32,
+        retry_errors: bool,
     }
 
     impl MockFetcher {
         fn always_fail() -> Self {
-            Self { call_count: Arc::new(AtomicU32::new(0)), fail_count: u32::MAX }
+            Self::new(u32::MAX, true)
         }
 
         fn fail_times(n: u32) -> Self {
-            Self { call_count: Arc::new(AtomicU32::new(0)), fail_count: n }
+            Self::new(n, true)
         }
 
         fn always_succeed() -> Self {
             Self::fail_times(0)
+        }
+
+        fn non_retryable_error() -> Self {
+            Self::new(u32::MAX, false)
+        }
+
+        fn new(fail_count: u32, retry_errors: bool) -> Self {
+            Self { call_count: Arc::new(AtomicU32::new(0)), fail_count, retry_errors }
         }
     }
 
@@ -383,6 +396,10 @@ mod tests {
 
         async fn get_block(&self, _: BlockId) -> Result<Option<Block>, Self::Error> {
             Ok(None)
+        }
+
+        fn should_retry_get_logs_error(&self, _error: &Self::Error) -> bool {
+            self.retry_errors
         }
     }
 
@@ -576,6 +593,26 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(L1WatcherActorError::RetriesExhausted)));
+    }
+
+    #[tokio::test]
+    async fn fetch_logs_non_retryable_error_returns_immediately() {
+        let cancel = CancellationToken::new();
+        let fetcher = MockFetcher::non_retryable_error();
+        let call_count = Arc::clone(&fetcher.call_count);
+
+        let result = LogRetrier::fetch_logs_with_retry(
+            &fetcher,
+            Filter::new(),
+            &cancel,
+            dummy_block(),
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+        )
+        .await;
+
+        assert!(matches!(result, Err(L1WatcherActorError::Fetcher(_))));
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
