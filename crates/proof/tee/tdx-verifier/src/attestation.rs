@@ -6,8 +6,8 @@ use thiserror::Error;
 /// Magic prefix for encoded TDX signer attestations returned by JSON-RPC.
 pub const TDX_SIGNER_ATTESTATION_MAGIC: &[u8; 8] = b"BASETDX2";
 
-/// Encoded TDX signer attestation header length.
-pub const TDX_SIGNER_ATTESTATION_HEADER_LEN: usize = 32;
+/// Encoded TDX signer attestation header length: magic + timestamp + 2 lengths.
+pub const TDX_SIGNER_ATTESTATION_HEADER_LEN: usize = TDX_SIGNER_ATTESTATION_MAGIC.len() + 8 + 8 + 8;
 
 /// Self-contained TDX signer attestation returned by `enclave_signerAttestation`.
 ///
@@ -60,32 +60,28 @@ impl TdxSignerAttestation {
             return Err(TdxSignerAttestationDecodeError::InvalidMagic);
         }
 
-        let mut timestamp = [0u8; 8];
-        timestamp.copy_from_slice(&encoded[8..16]);
-        let quote_timestamp_millis = u64::from_le_bytes(timestamp);
+        let quote_timestamp_millis = Self::read_le_u64(&encoded[8..16]);
+        let public_key_len_u64 = Self::read_le_u64(&encoded[16..24]);
+        let quote_len_u64 = Self::read_le_u64(&encoded[24..32]);
 
-        let mut public_key_len = [0u8; 8];
-        public_key_len.copy_from_slice(&encoded[16..24]);
-        let public_key_len = u64::from_le_bytes(public_key_len);
-        let public_key_len = usize::try_from(public_key_len).map_err(|_| {
+        let public_key_len = usize::try_from(public_key_len_u64).map_err(|_| {
             TdxSignerAttestationDecodeError::LengthOverflow {
                 field: "public_key",
-                len: public_key_len,
+                len: public_key_len_u64,
             }
         })?;
-
-        let mut quote_len = [0u8; 8];
-        quote_len.copy_from_slice(&encoded[24..32]);
-        let quote_len = u64::from_le_bytes(quote_len);
-        let quote_len = usize::try_from(quote_len).map_err(|_| {
-            TdxSignerAttestationDecodeError::LengthOverflow { field: "quote", len: quote_len }
+        let quote_len = usize::try_from(quote_len_u64).map_err(|_| {
+            TdxSignerAttestationDecodeError::LengthOverflow { field: "quote", len: quote_len_u64 }
         })?;
+
         let expected_len = TDX_SIGNER_ATTESTATION_HEADER_LEN
             .checked_add(public_key_len)
             .and_then(|len| len.checked_add(quote_len))
-            .ok_or(TdxSignerAttestationDecodeError::LengthOverflow {
+            .ok_or_else(|| TdxSignerAttestationDecodeError::LengthOverflow {
                 field: "payload",
-                len: encoded.len() as u64,
+                len: (TDX_SIGNER_ATTESTATION_HEADER_LEN as u64)
+                    .saturating_add(public_key_len_u64)
+                    .saturating_add(quote_len_u64),
             })?;
         if encoded.len() != expected_len {
             return Err(TdxSignerAttestationDecodeError::LengthMismatch {
@@ -97,10 +93,14 @@ impl TdxSignerAttestation {
         let public_key_start = TDX_SIGNER_ATTESTATION_HEADER_LEN;
         let quote_start = public_key_start + public_key_len;
         Ok(Self {
-            signer_public_key: Bytes::from(encoded[public_key_start..quote_start].to_vec()),
-            quote: Bytes::from(encoded[quote_start..].to_vec()),
+            signer_public_key: Bytes::copy_from_slice(&encoded[public_key_start..quote_start]),
+            quote: Bytes::copy_from_slice(&encoded[quote_start..]),
             quote_timestamp_millis,
         })
+    }
+
+    fn read_le_u64(bytes: &[u8]) -> u64 {
+        u64::from_le_bytes(bytes.try_into().expect("caller guarantees 8 bytes"))
     }
 }
 
