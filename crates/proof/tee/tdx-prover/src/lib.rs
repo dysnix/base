@@ -12,7 +12,7 @@ mod error;
 pub use error::{Result, TdxProverError};
 
 mod image;
-pub use image::{MeasuredMockTdxQuoteProvider, TdxMeasurements, TdxQuoteBuilder};
+pub use image::{MeasuredMockTdxQuoteProvider, TdxMeasurements};
 
 mod oracle;
 pub use oracle::Oracle;

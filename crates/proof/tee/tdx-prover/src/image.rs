@@ -8,12 +8,30 @@ use base_proof_tee_tdx_runtime::{
 use base_proof_tee_tdx_verifier::{
     CERTIFICATION_DATA_HEADER_LEN, ECDSA_P256_ATTESTATION_KEY_TYPE, ECDSA_P256_PUBLIC_KEY_BODY_LEN,
     ECDSA_P256_SIGNATURE_LEN, ECDSA_SIG_AUX_DATA_CERTIFICATION_DATA_TYPE, MIN_SIGNATURE_DATA_LEN,
-    ParsedTdxQuote, QE_AUTHENTICATION_DATA_SIZE_LEN, QE_REPORT_LEN, REPORT_DATA_OFFSET,
-    RTMR_OFFSET, TDX_MEASUREMENT_LEN, TDX_QUOTE_HEADER_LEN, TDX_REPORT_BODY_LEN,
-    TDX_REPORT_DATA_LEN, TDX_TEE_TYPE, TdxQuote, TdxVerifier,
+    MRTD_OFFSET, ParsedTdxQuote, QE_AUTHENTICATION_DATA_SIZE_LEN, QE_REPORT_LEN,
+    REPORT_DATA_OFFSET, RTMR_OFFSET, TDX_MEASUREMENT_LEN, TDX_QUOTE_HEADER_LEN,
+    TDX_REPORT_BODY_LEN, TDX_REPORT_DATA_LEN, TDX_TEE_TYPE, TdxQuote, TdxVerifier,
 };
 
 use crate::Result;
+
+/// Width of the `u32` length prefix preceding the quote signature data.
+const SIGNATURE_DATA_LEN_PREFIX_LEN: usize = 4;
+
+const AUX_DATA_LEN: usize = QE_REPORT_LEN
+    + ECDSA_P256_SIGNATURE_LEN
+    + QE_AUTHENTICATION_DATA_SIZE_LEN
+    + CERTIFICATION_DATA_HEADER_LEN;
+
+const SIGNATURE_DATA_LEN: usize = ECDSA_P256_SIGNATURE_LEN
+    + ECDSA_P256_PUBLIC_KEY_BODY_LEN
+    + CERTIFICATION_DATA_HEADER_LEN
+    + AUX_DATA_LEN;
+
+const _: () = assert!(SIGNATURE_DATA_LEN == MIN_SIGNATURE_DATA_LEN);
+
+const QUOTE_LEN: usize =
+    TDX_QUOTE_HEADER_LEN + TDX_REPORT_BODY_LEN + SIGNATURE_DATA_LEN_PREFIX_LEN + SIGNATURE_DATA_LEN;
 
 /// TDX measurements that feed the contract-compatible image hash.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,74 +81,48 @@ impl TdxMeasurements {
     pub fn image_hash(&self) -> B256 {
         TdxVerifier::image_hash(&self.mrtd, &self.rtmr0, &self.rtmr1, &self.rtmr2, &self.rtmr3)
     }
-}
 
-/// Deterministic TDX quote builder for local mock mode and tests.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TdxQuoteBuilder {
-    measurements: TdxMeasurements,
-    report_data: [u8; TDX_REPORT_DATA_LEN],
-}
+    /// Builds a parseable TDX quote carrying these measurements and the supplied report data.
+    pub fn build_mock_quote(&self, report_data: &[u8; TDX_REPORT_DATA_LEN]) -> Bytes {
+        let mut quote = vec![0u8; QUOTE_LEN];
 
-impl TdxQuoteBuilder {
-    /// Creates a builder from measurements and exact report data.
-    pub const fn new(
-        measurements: TdxMeasurements,
-        report_data: [u8; TDX_REPORT_DATA_LEN],
-    ) -> Self {
-        Self { measurements, report_data }
-    }
-
-    /// Builds a parseable TDX quote carrying the configured measurements.
-    pub fn build(&self) -> Bytes {
-        let aux_data_len = QE_REPORT_LEN
-            + ECDSA_P256_SIGNATURE_LEN
-            + QE_AUTHENTICATION_DATA_SIZE_LEN
-            + CERTIFICATION_DATA_HEADER_LEN;
-        let signature_data_len =
-            ECDSA_P256_SIGNATURE_LEN + ECDSA_P256_PUBLIC_KEY_BODY_LEN + 6 + aux_data_len;
-        debug_assert_eq!(signature_data_len, MIN_SIGNATURE_DATA_LEN);
-
-        let mut quote = vec![0u8; TDX_QUOTE_HEADER_LEN + TDX_REPORT_BODY_LEN + 4];
         quote[0..2].copy_from_slice(&4u16.to_le_bytes());
         quote[2..4].copy_from_slice(&ECDSA_P256_ATTESTATION_KEY_TYPE.to_le_bytes());
         quote[4..8].copy_from_slice(&TDX_TEE_TYPE.to_le_bytes());
 
         let report_start = TDX_QUOTE_HEADER_LEN;
         let report = &mut quote[report_start..report_start + TDX_REPORT_BODY_LEN];
-        report[base_proof_tee_tdx_verifier::MRTD_OFFSET
-            ..base_proof_tee_tdx_verifier::MRTD_OFFSET + TDX_MEASUREMENT_LEN]
-            .copy_from_slice(&self.measurements.mrtd);
-        report[RTMR_OFFSET..RTMR_OFFSET + TDX_MEASUREMENT_LEN]
-            .copy_from_slice(&self.measurements.rtmr0);
-        report[RTMR_OFFSET + TDX_MEASUREMENT_LEN..RTMR_OFFSET + (TDX_MEASUREMENT_LEN * 2)]
-            .copy_from_slice(&self.measurements.rtmr1);
-        report[RTMR_OFFSET + (TDX_MEASUREMENT_LEN * 2)..RTMR_OFFSET + (TDX_MEASUREMENT_LEN * 3)]
-            .copy_from_slice(&self.measurements.rtmr2);
-        report[RTMR_OFFSET + (TDX_MEASUREMENT_LEN * 3)..RTMR_OFFSET + (TDX_MEASUREMENT_LEN * 4)]
-            .copy_from_slice(&self.measurements.rtmr3);
+        report[MRTD_OFFSET..MRTD_OFFSET + TDX_MEASUREMENT_LEN].copy_from_slice(&self.mrtd);
+        for (i, rtmr) in [&self.rtmr0, &self.rtmr1, &self.rtmr2, &self.rtmr3].iter().enumerate() {
+            let off = RTMR_OFFSET + i * TDX_MEASUREMENT_LEN;
+            report[off..off + TDX_MEASUREMENT_LEN].copy_from_slice(*rtmr);
+        }
         report[REPORT_DATA_OFFSET..REPORT_DATA_OFFSET + TDX_REPORT_DATA_LEN]
-            .copy_from_slice(&self.report_data);
+            .copy_from_slice(report_data);
 
-        quote[TDX_QUOTE_HEADER_LEN + TDX_REPORT_BODY_LEN
-            ..TDX_QUOTE_HEADER_LEN + TDX_REPORT_BODY_LEN + 4]
-            .copy_from_slice(&(signature_data_len as u32).to_le_bytes());
+        let sig_len_prefix_start = TDX_QUOTE_HEADER_LEN + TDX_REPORT_BODY_LEN;
+        quote[sig_len_prefix_start..sig_len_prefix_start + SIGNATURE_DATA_LEN_PREFIX_LEN]
+            .copy_from_slice(&(SIGNATURE_DATA_LEN as u32).to_le_bytes());
 
-        let mut signature_data = vec![0u8; signature_data_len];
+        let signature_data_start = sig_len_prefix_start + SIGNATURE_DATA_LEN_PREFIX_LEN;
+        let signature_data =
+            &mut quote[signature_data_start..signature_data_start + SIGNATURE_DATA_LEN];
         let aux_header_offset = ECDSA_P256_SIGNATURE_LEN + ECDSA_P256_PUBLIC_KEY_BODY_LEN;
         signature_data[aux_header_offset..aux_header_offset + 2]
             .copy_from_slice(&ECDSA_SIG_AUX_DATA_CERTIFICATION_DATA_TYPE.to_le_bytes());
-        signature_data[aux_header_offset + 2..aux_header_offset + 6]
-            .copy_from_slice(&(aux_data_len as u32).to_le_bytes());
+        signature_data[aux_header_offset + 2..aux_header_offset + CERTIFICATION_DATA_HEADER_LEN]
+            .copy_from_slice(&(AUX_DATA_LEN as u32).to_le_bytes());
 
-        let aux_data_start = aux_header_offset + 6;
-        let cert_header_offset = aux_data_start + QE_REPORT_LEN + ECDSA_P256_SIGNATURE_LEN + 2;
+        let aux_data_start = aux_header_offset + CERTIFICATION_DATA_HEADER_LEN;
+        let cert_header_offset = aux_data_start
+            + QE_REPORT_LEN
+            + ECDSA_P256_SIGNATURE_LEN
+            + QE_AUTHENTICATION_DATA_SIZE_LEN;
         signature_data[cert_header_offset..cert_header_offset + 2]
             .copy_from_slice(&0u16.to_le_bytes());
-        signature_data[cert_header_offset + 2..cert_header_offset + 6]
+        signature_data[cert_header_offset + 2..cert_header_offset + CERTIFICATION_DATA_HEADER_LEN]
             .copy_from_slice(&0u32.to_le_bytes());
 
-        quote.extend_from_slice(&signature_data);
         Bytes::from(quote)
     }
 }
@@ -167,7 +159,7 @@ impl TdxQuoteProvider for MeasuredMockTdxQuoteProvider {
         TdxReportData::validate(report_data)?;
         let mut report_data_array = [0u8; TDX_REPORT_DATA_LEN];
         report_data_array.copy_from_slice(report_data);
-        let quote = TdxQuoteBuilder::new(self.measurements.clone(), report_data_array).build();
+        let quote = self.measurements.build_mock_quote(&report_data_array);
 
         Ok(TdxCollectedQuote { quote, metadata: self.metadata.clone() })
     }
@@ -181,10 +173,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quote_builder_emits_parseable_quote_with_measurements() {
+    fn build_mock_quote_emits_parseable_quote_with_measurements() {
         let measurements = TdxMeasurements::local_mock();
         let report_data = [0xAB; TDX_REPORT_DATA_LEN];
-        let quote = TdxQuoteBuilder::new(measurements.clone(), report_data).build();
+        let quote = measurements.build_mock_quote(&report_data);
         let parsed = TdxQuote::parse(&quote).unwrap();
 
         assert_eq!(parsed.report_data, report_data);
