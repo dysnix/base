@@ -11,3 +11,4 @@
 # Note: when RUSTFLAGS env var is set (as in the Justfile), it overrides this
 # config entirely — the Justfile includes this flag in its RUSTFLAGS.
 rustflags = ['--cfg', 'getrandom_backend="custom"']
+
