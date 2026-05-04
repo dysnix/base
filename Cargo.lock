@@ -5593,6 +5593,7 @@ dependencies = [
  "backon",
  "base-common-signer",
  "base-metrics",
+ "base-runtime",
  "clap",
  "humantime",
  "metrics",
