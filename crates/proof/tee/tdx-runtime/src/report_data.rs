@@ -18,10 +18,6 @@ impl TdxReportData {
     /// The first 32 bytes are `keccak256(public_key[1..65])`. The last 32
     /// bytes bind the app context and quote collection timestamp.
     pub fn for_public_key(public_key: &[u8], quote_timestamp_millis: u64) -> Result<[u8; 64]> {
-        if public_key.len() != 65 || public_key.first() != Some(&0x04) {
-            return Err(TdxRuntimeError::InvalidPublicKey);
-        }
-
         let mut report_data = [0u8; TDX_REPORT_DATA_LEN];
         report_data[..32].copy_from_slice(Self::public_key_prefix(public_key)?.as_slice());
         report_data[32..]
@@ -39,15 +35,11 @@ impl TdxReportData {
 
     /// Computes the timestamp-bound app-specific suffix.
     pub fn timestamped_app_binding(quote_timestamp_millis: u64) -> B256 {
-        let mut buf = Vec::with_capacity(TDX_REPORT_DATA_SUFFIX_CONTEXT.len() + 8);
-        buf.extend_from_slice(TDX_REPORT_DATA_SUFFIX_CONTEXT);
-        buf.extend_from_slice(&quote_timestamp_millis.to_le_bytes());
+        const CONTEXT_LEN: usize = TDX_REPORT_DATA_SUFFIX_CONTEXT.len();
+        let mut buf = [0u8; CONTEXT_LEN + 8];
+        buf[..CONTEXT_LEN].copy_from_slice(TDX_REPORT_DATA_SUFFIX_CONTEXT);
+        buf[CONTEXT_LEN..].copy_from_slice(&quote_timestamp_millis.to_le_bytes());
         keccak256(buf)
-    }
-
-    /// Computes the static app binding hash for callers that need the domain hash.
-    pub fn app_binding_hash() -> B256 {
-        keccak256(TDX_REPORT_DATA_SUFFIX_CONTEXT)
     }
 
     /// Validates a runtime-supplied report-data buffer.
