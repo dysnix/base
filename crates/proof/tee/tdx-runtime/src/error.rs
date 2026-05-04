@@ -1,4 +1,4 @@
-use std::{io, time::SystemTimeError};
+use std::{io, path::Path, time::SystemTimeError};
 
 use thiserror::Error;
 
@@ -53,6 +53,11 @@ impl TdxRuntimeError {
     /// Creates a filesystem error without exposing secret material in logs.
     pub fn filesystem(path: impl Into<String>, source: io::Error) -> Self {
         Self::Filesystem { path: path.into(), source }
+    }
+
+    /// Creates a filesystem error from a `Path`.
+    pub fn filesystem_at(path: &Path, source: io::Error) -> Self {
+        Self::Filesystem { path: path.display().to_string(), source }
     }
 }
 

@@ -15,6 +15,12 @@ pub const DEFAULT_TSM_REPORT_ROOT: &str = "/sys/kernel/config/tsm/report";
 /// Provider name exposed by the Linux TDX guest TSM backend.
 pub const TDX_CONFIGFS_PROVIDER_NAME: &str = "tdx_guest";
 
+const INBLOB_FILE: &str = "inblob";
+const OUTBLOB_FILE: &str = "outblob";
+const AUXBLOB_FILE: &str = "auxblob";
+const GENERATION_FILE: &str = "generation";
+const PROVIDER_FILE: &str = "provider";
+
 static CONFIGFS_REPORT_DIR_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
     OnceLock::new();
 
@@ -49,23 +55,10 @@ pub struct ConfigfsTdxQuoteProvider {
     quote_lock: Arc<Mutex<()>>,
 }
 
-impl PartialEq for ConfigfsTdxQuoteProvider {
-    fn eq(&self, other: &Self) -> bool {
-        self.report_dir == other.report_dir
-    }
-}
-
-impl Eq for ConfigfsTdxQuoteProvider {}
-
 impl ConfigfsTdxQuoteProvider {
     /// Creates a provider under the default TSM report root.
     pub fn new(report_name: impl AsRef<Path>) -> Self {
-        Self::with_report_root(DEFAULT_TSM_REPORT_ROOT, report_name)
-    }
-
-    /// Creates a provider rooted at a custom TSM report root.
-    pub fn with_report_root(root: impl AsRef<Path>, report_name: impl AsRef<Path>) -> Self {
-        Self::with_report_dir(root.as_ref().join(report_name))
+        Self::with_report_dir(Path::new(DEFAULT_TSM_REPORT_ROOT).join(report_name))
     }
 
     /// Creates a provider from a concrete report directory.
@@ -74,6 +67,7 @@ impl ConfigfsTdxQuoteProvider {
         let locks = CONFIGFS_REPORT_DIR_LOCKS.get_or_init(Mutex::default);
         let mut locks = locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let quote_lock = locks.get(&report_dir).and_then(Weak::upgrade).unwrap_or_else(|| {
+            locks.retain(|_, weak| weak.strong_count() > 0);
             let quote_lock = Arc::new(Mutex::new(()));
             locks.insert(report_dir.clone(), Arc::downgrade(&quote_lock));
             quote_lock
@@ -82,49 +76,28 @@ impl ConfigfsTdxQuoteProvider {
         Self { report_dir, quote_lock }
     }
 
-    /// Returns the configfs report directory used by this provider.
-    pub fn report_dir(&self) -> &Path {
-        &self.report_dir
-    }
-
-    /// Returns a path below the configfs report directory.
-    pub fn path(&self, file_name: &str) -> PathBuf {
-        self.report_dir.join(file_name)
-    }
-
     /// Reads the optional TSM auxiliary blob if the provider exposes one.
     pub fn read_optional_aux_blob(&self) -> Result<Option<Bytes>> {
-        let aux_path = self.path("auxblob");
+        let aux_path = self.report_dir.join(AUXBLOB_FILE);
         match fs::read(&aux_path) {
             Ok(bytes) if bytes.is_empty() => Ok(None),
             Ok(bytes) => Ok(Some(Bytes::from(bytes))),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(TdxRuntimeError::filesystem(aux_path.display().to_string(), error)),
+            Err(error) => Err(TdxRuntimeError::filesystem_at(&aux_path, error)),
         }
     }
 
     /// Reads the TSM report generation counter.
     pub fn read_generation(&self) -> Result<u64> {
-        let generation_path = self.path("generation");
-        let generation = fs::read_to_string(&generation_path).map_err(|error| {
-            TdxRuntimeError::filesystem(generation_path.display().to_string(), error)
-        })?;
-        let generation = generation.trim();
+        let generation_path = self.report_dir.join(GENERATION_FILE);
+        let generation = fs::read_to_string(&generation_path)
+            .map_err(|error| TdxRuntimeError::filesystem_at(&generation_path, error))?;
 
-        generation.parse::<u64>().map_err(|error| {
+        generation.trim().parse::<u64>().map_err(|error| {
             TdxRuntimeError::QuoteGeneration(format!(
                 "invalid configfs generation at {}: {error}",
                 generation_path.display()
             ))
-        })
-    }
-
-    /// Returns the expected generation counter after one report-data write.
-    pub fn next_generation(&self, generation: u64) -> Result<u64> {
-        generation.checked_add(1).ok_or_else(|| {
-            TdxRuntimeError::QuoteGeneration(
-                "configfs generation counter overflowed while collecting a quote".into(),
-            )
         })
     }
 
@@ -143,16 +116,14 @@ impl ConfigfsTdxQuoteProvider {
 
     /// Verifies that the configfs provider marker is TDX when present.
     pub fn verify_provider(&self) -> Result<()> {
-        let provider_path = self.path("provider");
+        let provider_path = self.report_dir.join(PROVIDER_FILE);
         match fs::read_to_string(&provider_path) {
             Ok(provider) if provider.trim() == TDX_CONFIGFS_PROVIDER_NAME => Ok(()),
             Ok(provider) => {
                 Err(TdxRuntimeError::UnexpectedConfigfsProvider(provider.trim().to_owned()))
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => {
-                Err(TdxRuntimeError::filesystem(provider_path.display().to_string(), error))
-            }
+            Err(error) => Err(TdxRuntimeError::filesystem_at(&provider_path, error)),
         }
     }
 }
@@ -164,21 +135,22 @@ impl TdxQuoteProvider for ConfigfsTdxQuoteProvider {
             TdxRuntimeError::QuoteGeneration("configfs quote lock is poisoned".into())
         })?;
 
-        fs::create_dir_all(&self.report_dir).map_err(|error| {
-            TdxRuntimeError::filesystem(self.report_dir.display().to_string(), error)
-        })?;
+        fs::create_dir_all(&self.report_dir)
+            .map_err(|error| TdxRuntimeError::filesystem_at(&self.report_dir, error))?;
         self.verify_provider()?;
-        let expected_generation = self.next_generation(self.read_generation()?)?;
-
-        let inblob_path = self.path("inblob");
-        fs::write(&inblob_path, report_data).map_err(|error| {
-            TdxRuntimeError::filesystem(inblob_path.display().to_string(), error)
+        let expected_generation = self.read_generation()?.checked_add(1).ok_or_else(|| {
+            TdxRuntimeError::QuoteGeneration(
+                "configfs generation counter overflowed while collecting a quote".into(),
+            )
         })?;
 
-        let outblob_path = self.path("outblob");
-        let quote = fs::read(&outblob_path).map_err(|error| {
-            TdxRuntimeError::filesystem(outblob_path.display().to_string(), error)
-        })?;
+        let inblob_path = self.report_dir.join(INBLOB_FILE);
+        fs::write(&inblob_path, report_data)
+            .map_err(|error| TdxRuntimeError::filesystem_at(&inblob_path, error))?;
+
+        let outblob_path = self.report_dir.join(OUTBLOB_FILE);
+        let quote = fs::read(&outblob_path)
+            .map_err(|error| TdxRuntimeError::filesystem_at(&outblob_path, error))?;
         if quote.is_empty() {
             return Err(TdxRuntimeError::QuoteGeneration(
                 "configfs returned an empty quote".into(),
@@ -201,28 +173,22 @@ impl TdxQuoteProvider for ConfigfsTdxQuoteProvider {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MockTdxQuoteProvider {
     quote: Bytes,
-    metadata: TdxLocalQuoteMetadata,
 }
 
 impl MockTdxQuoteProvider {
     /// Creates a deterministic mock provider returning the supplied fixture quote.
     pub fn new(quote: impl Into<Bytes>) -> Self {
-        Self {
-            quote: quote.into(),
-            metadata: TdxLocalQuoteMetadata { provider: "mock".to_owned(), aux_blob: None },
-        }
-    }
-
-    /// Creates a deterministic mock provider with explicit metadata.
-    pub fn with_metadata(quote: impl Into<Bytes>, metadata: TdxLocalQuoteMetadata) -> Self {
-        Self { quote: quote.into(), metadata }
+        Self { quote: quote.into() }
     }
 }
 
 impl TdxQuoteProvider for MockTdxQuoteProvider {
     fn quote(&self, report_data: &[u8]) -> Result<TdxCollectedQuote> {
         TdxReportData::validate(report_data)?;
-        Ok(TdxCollectedQuote { quote: self.quote.clone(), metadata: self.metadata.clone() })
+        Ok(TdxCollectedQuote {
+            quote: self.quote.clone(),
+            metadata: TdxLocalQuoteMetadata { provider: "mock".to_owned(), aux_blob: None },
+        })
     }
 }
 
