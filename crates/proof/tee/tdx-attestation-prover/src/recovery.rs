@@ -2,8 +2,6 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use alloy_sol_types::SolValue;
-use base_proof_tee_attestation::TeeAttestationProof;
 use base_proof_tee_tdx_verifier::TDXVerifierJournal;
 
 /// Policy for accepting recovered TDX proofs.
@@ -17,27 +15,6 @@ impl RecoveredProofPolicy {
     /// Creates a new recovered proof freshness policy.
     pub const fn new(max_recovered_quote_age: Duration) -> Self {
         Self { max_recovered_quote_age }
-    }
-
-    /// Returns true when the recovered proof's journal timestamp is fresh at wall-clock time.
-    pub fn is_fresh(&self, proof: &TeeAttestationProof) -> bool {
-        let Some(now_millis) = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()
-            .and_then(|duration| u64::try_from(duration.as_millis()).ok())
-        else {
-            return false;
-        };
-        self.is_fresh_at(proof, now_millis)
-    }
-
-    /// Returns true when the recovered proof's journal timestamp is fresh at `now_millis`.
-    pub fn is_fresh_at(&self, proof: &TeeAttestationProof, now_millis: u64) -> bool {
-        let Ok(journal) = <TDXVerifierJournal as SolValue>::abi_decode_validate(&proof.output)
-        else {
-            return false;
-        };
-        self.journal_is_fresh_at(&journal, now_millis)
     }
 
     /// Returns true when the recovered journal timestamp is fresh at wall-clock time.
@@ -54,15 +31,14 @@ impl RecoveredProofPolicy {
 
     /// Returns true when the recovered journal timestamp is fresh at `now_millis`.
     pub fn journal_is_fresh_at(&self, journal: &TDXVerifierJournal, now_millis: u64) -> bool {
-        let age = Duration::from_millis(now_millis.saturating_sub(journal.timestamp));
-        age <= self.max_recovered_quote_age && journal.timestamp <= now_millis
+        journal.timestamp <= now_millis
+            && Duration::from_millis(now_millis - journal.timestamp) <= self.max_recovered_quote_age
     }
 }
 
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{Address, B256, Bytes};
-    use base_proof_tee_attestation::TeeAttestationKind;
     use base_proof_tee_tdx_verifier::{TDXTcbStatus, TDXVerificationResult};
     use rstest::rstest;
 
@@ -70,8 +46,8 @@ mod tests {
 
     const NOW_MILLIS: u64 = 1_711_111_111_000;
 
-    fn proof(timestamp: u64) -> TeeAttestationProof {
-        let journal = TDXVerifierJournal {
+    fn journal(timestamp: u64) -> TDXVerifierJournal {
+        TDXVerifierJournal {
             result: TDXVerificationResult::Success,
             tcbStatus: TDXTcbStatus::UpToDate,
             timestamp,
@@ -86,11 +62,6 @@ mod tests {
             mrTdHash: B256::repeat_byte(0x66),
             reportDataPrefix: B256::repeat_byte(0x77),
             reportDataSuffix: B256::repeat_byte(0x88),
-        };
-        TeeAttestationProof {
-            kind: TeeAttestationKind::Tdx,
-            output: Bytes::from(SolValue::abi_encode(&journal)),
-            proof_bytes: Bytes::from_static(b"proof"),
         }
     }
 
@@ -98,32 +69,20 @@ mod tests {
     fn recovered_proof_with_fresh_quote_is_accepted() {
         let policy = RecoveredProofPolicy::new(Duration::from_secs(300));
 
-        assert!(policy.is_fresh_at(&proof(NOW_MILLIS - 299_000), NOW_MILLIS));
+        assert!(policy.journal_is_fresh_at(&journal(NOW_MILLIS - 299_000), NOW_MILLIS));
     }
 
     #[rstest]
     fn recovered_proof_with_old_quote_is_skipped() {
         let policy = RecoveredProofPolicy::new(Duration::from_secs(300));
 
-        assert!(!policy.is_fresh_at(&proof(NOW_MILLIS - 301_000), NOW_MILLIS));
+        assert!(!policy.journal_is_fresh_at(&journal(NOW_MILLIS - 301_000), NOW_MILLIS));
     }
 
     #[rstest]
     fn recovered_proof_with_future_quote_is_skipped() {
         let policy = RecoveredProofPolicy::new(Duration::from_secs(300));
 
-        assert!(!policy.is_fresh_at(&proof(NOW_MILLIS + 1), NOW_MILLIS));
-    }
-
-    #[rstest]
-    fn recovered_proof_with_malformed_journal_is_skipped() {
-        let policy = RecoveredProofPolicy::new(Duration::from_secs(300));
-        let proof = TeeAttestationProof {
-            kind: TeeAttestationKind::Tdx,
-            output: Bytes::from_static(b"not abi"),
-            proof_bytes: Bytes::from_static(b"proof"),
-        };
-
-        assert!(!policy.is_fresh_at(&proof, NOW_MILLIS));
+        assert!(!policy.journal_is_fresh_at(&journal(NOW_MILLIS + 1), NOW_MILLIS));
     }
 }
