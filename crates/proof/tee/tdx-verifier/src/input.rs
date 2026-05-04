@@ -4,7 +4,7 @@ use std::fmt;
 
 use alloy_primitives::{Address, B256, Bytes};
 
-use crate::{TDXTcbStatus, TdxCertificate, TdxCollateral, TdxRevocationEvidence};
+use crate::{TDXTcbStatus, TdxCertificate, TdxCollateral, TdxRevocationEvidence, TdxTcbStatusList};
 
 /// Quote timestamp policy enforced inside the verifier guest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,8 +44,6 @@ pub struct TdxVerifierInput {
 
 impl fmt::Debug for TdxVerifierInput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let allowed_tcb_statuses =
-            self.allowed_tcb_statuses.iter().map(|status| *status as u8).collect::<Vec<_>>();
         f.debug_struct("TdxVerifierInput")
             .field("quote_len", &self.quote.len())
             .field("pck_certificate_chain", &self.pck_certificate_chain)
@@ -57,7 +55,7 @@ impl fmt::Debug for TdxVerifierInput {
             .field("quote_timestamp_millis", &self.quote_timestamp_millis)
             .field("verification_time", &self.verification_time)
             .field("policy", &self.policy)
-            .field("allowed_tcb_statuses", &allowed_tcb_statuses)
+            .field("allowed_tcb_statuses", &TdxTcbStatusList(&self.allowed_tcb_statuses))
             .finish()
     }
 }

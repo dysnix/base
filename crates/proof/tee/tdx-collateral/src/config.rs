@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use alloy_primitives::{B256, b256};
-use base_proof_tee_tdx_verifier::TDXTcbStatus;
+use base_proof_tee_tdx_verifier::{TDXTcbStatus, TdxTcbStatusList};
 use url::Url;
 
 use crate::{Result, TdxCollateralError};
@@ -36,19 +36,11 @@ pub struct TdxAttestationConfig {
 
 impl std::fmt::Debug for TdxAttestationConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `TDXTcbStatus` is a `sol!`-generated enum without a `Debug` impl, so
-        // render it as the on-chain numeric discriminant.
-        struct Statuses<'a>(&'a [TDXTcbStatus]);
-        impl std::fmt::Debug for Statuses<'_> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.debug_list().entries(self.0.iter().map(|s| *s as u8)).finish()
-            }
-        }
         f.debug_struct("TdxAttestationConfig")
             .field("pcs_tdx_base_url", &self.pcs_tdx_base_url)
             .field("trusted_root_ca_hash", &self.trusted_root_ca_hash)
             .field("max_quote_age", &self.max_quote_age)
-            .field("allowed_tcb_statuses", &Statuses(&self.allowed_tcb_statuses))
+            .field("allowed_tcb_statuses", &TdxTcbStatusList(&self.allowed_tcb_statuses))
             .field("fetch_timeout", &self.fetch_timeout)
             .finish()
     }

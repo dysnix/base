@@ -3,6 +3,8 @@
 //! Mirrors the TDX ABI surface staged in the contracts branch so offchain
 //! verification code can encode and decode TDX attestation verifier journals.
 
+use std::fmt;
+
 use alloy_sol_types::sol;
 
 sol! {
@@ -134,6 +136,16 @@ sol! {
         function allowedTcbStatuses(TDXTcbStatus status) external view returns (bool);
     }
 
+}
+
+/// Debug wrapper that renders a `TDXTcbStatus` slice as its on-chain numeric
+/// discriminants. `TDXTcbStatus` is `sol!`-generated and has no `Debug` impl.
+pub struct TdxTcbStatusList<'a>(pub &'a [TDXTcbStatus]);
+
+impl fmt::Debug for TdxTcbStatusList<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.0.iter().map(|s| *s as u8)).finish()
+    }
 }
 
 #[cfg(test)]

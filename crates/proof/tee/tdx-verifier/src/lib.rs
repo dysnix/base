@@ -27,8 +27,8 @@ pub use input::{TdxQuotePolicy, TdxVerifierInput};
 
 mod types;
 pub use types::{
-    ITDXVerifier, TDXTcbStatus, TDXVerificationResult, TDXVerifierJournal, ZkCoProcessorConfig,
-    ZkCoProcessorType,
+    ITDXVerifier, TDXTcbStatus, TDXVerificationResult, TDXVerifierJournal, TdxTcbStatusList,
+    ZkCoProcessorConfig, ZkCoProcessorType,
 };
 
 mod quote;
