@@ -335,11 +335,12 @@ impl TeeAttestationProofProvider for BoundlessProver {
             .unwrap_or_else(|e| e.into_inner())
             .contains(&signer_address);
 
+        let loop_expiry = self.effective_expiry(None);
         let mut first_unknown_attempt = None;
         for attempt in 0..self.max_recovery_attempts {
             let index = Self::derive_request_index(signer_address, attempt);
             let request_id = RequestId::new(self.signer.address(), index);
-            let request_id_u256: alloy_primitives::U256 = request_id.clone().into();
+            let request_id_u256: alloy_primitives::U256 = request_id.into();
 
             debug!(
                 attempt,
@@ -354,7 +355,7 @@ impl TeeAttestationProofProvider for BoundlessProver {
                 Err(e) => {
                     if Self::is_request_not_locked_error(&e) && !recovery_is_blocked {
                         let proof = self
-                            .wait_and_fetch(&client, request_id_u256, self.effective_expiry(None))
+                            .wait_and_fetch(&client, request_id_u256, loop_expiry)
                             .await;
                         if let Ok(proof) = proof {
                             if self.recovered_proof_is_usable(&proof, signer_address) {
@@ -376,26 +377,16 @@ impl TeeAttestationProofProvider for BoundlessProver {
             };
 
             match status {
-                RequestStatus::Locked => {
+                status @ (RequestStatus::Locked | RequestStatus::Fulfilled) => {
                     if recovery_is_blocked {
                         continue;
                     }
-                    let proof = self
-                        .wait_and_fetch(&client, request_id_u256, self.effective_expiry(None))
-                        .await;
-                    if let Ok(proof) = proof {
-                        if self.recovered_proof_is_usable(&proof, signer_address) {
-                            return Ok(proof);
+                    let proof = match status {
+                        RequestStatus::Locked => {
+                            self.wait_and_fetch(&client, request_id_u256, loop_expiry).await
                         }
-                        continue;
-                    }
-                    break;
-                }
-                RequestStatus::Fulfilled => {
-                    if recovery_is_blocked {
-                        continue;
-                    }
-                    let proof = self.fetch_and_encode_receipt(&client, request_id_u256).await;
+                        _ => self.fetch_and_encode_receipt(&client, request_id_u256).await,
+                    };
                     if let Ok(proof) = proof {
                         if self.recovered_proof_is_usable(&proof, signer_address) {
                             return Ok(proof);
