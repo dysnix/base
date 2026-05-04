@@ -1,6 +1,9 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
+#[cfg(test)]
+pub mod test_utils;
+
 mod direct;
 pub use direct::{
     DIRECT_DEV_PROOF_BYTES, DirectProver, NativeTdxJournalVerifier, TdxJournalVerifier,

@@ -396,61 +396,10 @@ pub fn intel_tcb_status_from_u8(status: u8) -> Result<IntelTcbStatus> {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{B256, Bytes};
-    use base_proof_tee_tdx_verifier::TDXTcbStatus;
     use rstest::rstest;
 
     use super::*;
-
-    const SIGNER: Address = Address::repeat_byte(0x44);
-
-    fn certificate(byte: u8) -> TdxCertificate {
-        TdxCertificate {
-            raw: Bytes::from(vec![byte; 3]),
-            serial: Bytes::from(vec![byte; 2]),
-            subject_public_key: Bytes::from(vec![0x04, byte]),
-            issuer_public_key: Bytes::from(vec![0x04, byte.wrapping_add(1)]),
-            not_before: 1_700_000_000,
-            not_after: 1_800_000_000,
-            is_ca: true,
-            tbs_certificate: Bytes::from(vec![byte; 4]),
-            signature: Bytes::from(vec![byte; 64]),
-        }
-    }
-
-    fn signed_collateral(byte: u8) -> TdxSignedCollateral {
-        TdxSignedCollateral {
-            raw: Bytes::from(vec![byte; 5]),
-            signing_chain: vec![certificate(byte)],
-            signature: Bytes::from(vec![byte; 64]),
-            issue_time: 1_700_000_000,
-            next_update: 1_800_000_000,
-        }
-    }
-
-    fn verifier_input() -> TdxVerifierInput {
-        TdxVerifierInput {
-            quote: Bytes::from_static(b"quote"),
-            pck_certificate_chain: vec![certificate(0x11), certificate(0x22)],
-            collateral: TdxCollateral {
-                tcb_info: signed_collateral(0x33),
-                qe_identity: signed_collateral(0x44),
-                tcb_status: IntelTcbStatus::UpToDate,
-            },
-            revocation: TdxRevocationEvidence {
-                certificate_crls: vec![TdxCertificateRevocationList {
-                    raw: Bytes::from_static(b"crl"),
-                }],
-            },
-            trusted_root_ca_hash: B256::repeat_byte(0x55),
-            expected_public_key: Bytes::from(vec![0x04; 65]),
-            expected_signer: SIGNER,
-            quote_timestamp_millis: 1_711_111_111_000,
-            verification_time: 1_711_111_222,
-            policy: TdxQuotePolicy { max_quote_age_seconds: 300 },
-            allowed_tcb_statuses: vec![TDXTcbStatus::UpToDate, TDXTcbStatus::SwHardeningNeeded],
-        }
-    }
+    use crate::test_utils::verifier_input;
 
     #[rstest]
     fn prover_input_abi_round_trips() {
