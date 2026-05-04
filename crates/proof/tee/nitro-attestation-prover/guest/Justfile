@@ -1,9 +1,9 @@
 # Guest binary name (hyphens become underscores in the compiled binary)
 guest := "base-proof-tee-nitro-verifier-guest"
 
-# Expected risc0 toolchain commit hash. Update this when bumping the toolchain.
-# Run `rzup install` to install the risc0 toolchain, then verify with
-# `rustc +risc0 --version` which should print this commit in parentheses.
+# Expected risc0 toolchain version. Update these when bumping the toolchain.
+# Install with `rzup install rust <version>`, verify with `rustc +risc0 --version`.
+expected_risc0_rust := "1.91.1"
 expected_risc0_commit := "30e2186d0"
 
 # Repo root (resolved via git so the path doesn't break if the crate moves).
@@ -37,8 +37,9 @@ check-toolchain:
         echo "  expected commit: {{ expected_risc0_commit }}" >&2
         echo "  got:             $version" >&2
         echo "" >&2
-        echo "Run 'rzup install' to update, or update expected_risc0_commit" >&2
-        echo "in the Justfile if you intentionally bumped the toolchain." >&2
+        echo "Run 'rzup install rust {{ expected_risc0_rust }}' to install the correct version," >&2
+        echo "or update expected_risc0_commit in the Justfile if you intentionally" >&2
+        echo "bumped the toolchain." >&2
         exit 1
     fi
 
@@ -59,9 +60,9 @@ bundle: build
         target/riscv32im-risc0-zkvm-elf/release/{{ guest }} \
         --output target/{{ guest }}.r0bf
 
-# Install the risc0 toolchain via rzup
+# Install the pinned risc0 toolchain via rzup
 install-toolchain:
-    rzup install
+    rzup install rust {{ expected_risc0_rust }}
 
 # Clean build artifacts
 clean:

@@ -25,9 +25,11 @@ The output shows the **image ID** and writes the bundled R0BF file to
 ### 1. Install the risc0 toolchain
 
 ```sh
-rzup install
-# or: just install-toolchain
+just install-toolchain
 ```
+
+This installs the exact risc0 Rust toolchain version pinned in the Justfile.
+`just build` will verify the version before compiling.
 
 ### 2. Build and bundle
 
@@ -88,9 +90,9 @@ Three things ensure this:
 
 Different compiler versions produce different machine code, so the exact
 risc0 toolchain version matters. The expected version is pinned in the
-Justfile (`expected_risc0_commit`), and `just build` will refuse to proceed
-if the installed toolchain doesn't match. Install the correct version with
-`rzup install`.
+Justfile (`expected_risc0_rust` and `expected_risc0_commit`), and `just build`
+will refuse to proceed if the installed toolchain doesn't match. Install the
+correct version with `just install-toolchain` (or `rzup install rust <version>`).
 
 ### Dependency pinning
 
