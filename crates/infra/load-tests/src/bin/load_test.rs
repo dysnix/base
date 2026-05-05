@@ -139,11 +139,7 @@ async fn run_load_test(args: Vec<String>) -> Result<()> {
     let mut runner = LoadRunner::new(load_config.clone())?;
     runner.set_config_summary(config_summary.clone());
 
-    // Install signal handler before any long-running work. First signal sets
-    // the stop flag so `run()` exits its loop gracefully and the drain sequence
-    // runs. A second signal force-exits.
     let stop_flag = runner.stop_flag();
-    install_signal_handler(stop_flag);
 
     let run_result = run_test_phases(
         &mut runner,
@@ -152,6 +148,7 @@ async fn run_load_test(args: Vec<String>) -> Result<()> {
         swap_token_amount,
         &mp,
         load_config.duration,
+        stop_flag,
     )
     .await;
 
@@ -253,10 +250,13 @@ async fn run_test_phases(
     swap_token_amount: U256,
     mp: &indicatif::MultiProgress,
     duration: Option<Duration>,
+    stop_flag: Arc<std::sync::atomic::AtomicBool>,
 ) -> LoadResult<MetricsSummary> {
     println!("Funding test accounts...");
     runner.fund_accounts(funding_key.clone(), funding_amount).await?;
     println!("Accounts funded.");
+
+    install_signal_handler(stop_flag);
 
     if !runner.collect_swap_tokens().is_empty() {
         println!("Distributing swap tokens...");
