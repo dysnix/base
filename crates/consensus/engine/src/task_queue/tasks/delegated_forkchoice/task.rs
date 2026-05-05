@@ -7,10 +7,7 @@ use base_common_genesis::RollupConfig;
 use base_protocol::L2BlockInfo;
 use derive_more::Constructor;
 
-use crate::{
-    ConsolidateInput, DelegatedForkchoiceTaskError, Engine, EngineClient, EngineState,
-    EngineTaskExt, FinalizeTask,
-};
+use crate::{DelegatedForkchoiceTaskError, Engine, EngineClient, EngineState, EngineTaskExt};
 
 /// Delegated forkchoice labels from a remote follow source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,36 +35,12 @@ impl<EngineClient_: EngineClient> EngineTaskExt for DelegatedForkchoiceTask<Engi
     type Error = DelegatedForkchoiceTaskError;
 
     async fn execute(&self, state: &mut EngineState) -> Result<(), Self::Error> {
-        Engine::<EngineClient_>::consolidate_with_state(
+        Engine::<EngineClient_>::delegated_forkchoice_with_state(
             state,
             Arc::clone(&self.client),
             Arc::clone(&self.cfg),
-            ConsolidateInput::BlockInfo(self.update.safe_l2),
+            self.update,
         )
-        .await?;
-
-        let actual_safe = state.sync_state.safe_head().block_info.number;
-        let Some(remote_finalized) = self.update.finalized_l2_number else {
-            return Ok(());
-        };
-
-        let finalized_target = remote_finalized.min(actual_safe);
-        let current_finalized = state.sync_state.finalized_head().block_info.number;
-        if finalized_target <= current_finalized {
-            debug!(
-                target: "engine",
-                actual_safe,
-                current_finalized,
-                finalized_target,
-                "Skipping delegated finalized update"
-            );
-            return Ok(());
-        }
-
-        FinalizeTask::new(Arc::clone(&self.client), Arc::clone(&self.cfg), finalized_target)
-            .execute(state)
-            .await?;
-
-        Ok(())
+        .await
     }
 }
