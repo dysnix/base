@@ -3,8 +3,10 @@
 use std::{collections::BinaryHeap, sync::Arc, time::Instant};
 
 use alloy_eips::eip7685::EMPTY_REQUESTS_HASH;
-use alloy_rpc_types_engine::{CancunPayloadFields, ExecutionPayloadInputV2, PraguePayloadFields};
-use alloy_rpc_types_engine::{ExecutionPayload, PayloadId, PayloadStatusEnum};
+use alloy_rpc_types_engine::{
+    CancunPayloadFields, ExecutionPayload, ExecutionPayloadInputV2, PayloadId, PayloadStatusEnum,
+    PraguePayloadFields,
+};
 use base_common_consensus::BaseBlock;
 use base_common_genesis::RollupConfig;
 use base_common_rpc_types_engine::{
@@ -719,8 +721,10 @@ mod tests {
 
     use alloy_eips::eip2718::Encodable2718;
     use alloy_primitives::{Address, B256, Bloom, FixedBytes, U256};
-    use alloy_rpc_types_engine::{ExecutionPayloadV1, ExecutionPayloadV2};
-    use alloy_rpc_types_engine::{ForkchoiceUpdated, PayloadId, PayloadStatus, PayloadStatusEnum};
+    use alloy_rpc_types_engine::{
+        ExecutionPayloadV1, ExecutionPayloadV2, ForkchoiceUpdated, PayloadId, PayloadStatus,
+        PayloadStatusEnum,
+    };
     use base_common_consensus::{BaseTxEnvelope, TxDeposit};
     use base_common_genesis::RollupConfig;
     use base_common_rpc_types_engine::{BaseExecutionPayload, BaseExecutionPayloadEnvelope};
