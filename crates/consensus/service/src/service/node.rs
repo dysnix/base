@@ -33,7 +33,7 @@ use crate::{
     QueuedDerivationEngineClient, QueuedEngineDerivationClient, QueuedEngineRpcClient,
     QueuedL1WatcherDerivationClient, QueuedNetworkEngineClient, QueuedSequencerAdminAPIClient,
     QueuedSequencerEngineClient, RecoveryModeGuard, RpcActor, RpcContext, SequencerActor,
-    SequencerConfig,
+    SequencerConfig, TokioSequencerRuntime,
     actors::{BlockStream, NetworkInboundData, QueuedUnsafePayloadGossipClient},
 };
 
@@ -525,6 +525,7 @@ impl RollupNode {
                     is_active: self.sequencer_config.sequencer_stopped.not(),
                     recovery_mode,
                     rollup_config: Arc::clone(&self.config),
+                    runtime: Arc::new(TokioSequencerRuntime),
                     unsafe_payload_gossip_client: queued_gossip_client,
                     sealer: None,
                     pending_stop: None,

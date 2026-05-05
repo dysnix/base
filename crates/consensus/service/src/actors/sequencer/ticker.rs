@@ -5,11 +5,53 @@
 //! between target and actual fire is recorded to
 //! [`Metrics::sequencer_ticker_drift_seconds`]. Early fires record `0`.
 
-use std::time::{Duration, SystemTime};
+use std::{
+    future::Future,
+    pin::Pin,
+    time::{Duration, SystemTime},
+};
 
 use tokio::time::{Instant, Interval};
 
 use crate::Metrics;
+
+/// Boxed future returned by [`SequencerTicker`] and [`SequencerRuntime`].
+pub type SequencerRuntimeFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Runtime hook used by the sequencer actor for ordering-sensitive time operations.
+pub trait SequencerRuntime: std::fmt::Debug + Send + Sync {
+    /// Creates a ticker with the given period.
+    fn ticker(&self, period: Duration) -> Box<dyn SequencerTicker>;
+
+    /// Sleeps for the given duration.
+    fn sleep(&self, duration: Duration) -> SequencerRuntimeFuture<'static, ()>;
+}
+
+/// Ticker abstraction used by the sequencer actor.
+pub trait SequencerTicker: std::fmt::Debug + Send {
+    /// Reschedules the next tick for the given wall-clock target.
+    fn reset_at(&mut self, target: SystemTime);
+
+    /// Reschedules the next tick to fire immediately.
+    fn reset_immediately(&mut self);
+
+    /// Awaits the next tick.
+    fn tick(&mut self) -> SequencerRuntimeFuture<'_, Instant>;
+}
+
+/// Tokio-backed sequencer runtime used by production actors.
+#[derive(Debug, Default)]
+pub struct TokioSequencerRuntime;
+
+impl SequencerRuntime for TokioSequencerRuntime {
+    fn ticker(&self, period: Duration) -> Box<dyn SequencerTicker> {
+        Box::new(ScheduledTicker::new(period))
+    }
+
+    fn sleep(&self, duration: Duration) -> SequencerRuntimeFuture<'static, ()> {
+        Box::pin(tokio::time::sleep(duration))
+    }
+}
 
 /// A [`tokio::time::Interval`] that remembers its wall-clock target so the
 /// drift between intended and actual fire time can be observed transparently
@@ -63,5 +105,19 @@ impl ScheduledTicker {
             Metrics::sequencer_ticker_drift_seconds().record(drift);
         }
         instant
+    }
+}
+
+impl SequencerTicker for ScheduledTicker {
+    fn reset_at(&mut self, target: SystemTime) {
+        Self::reset_at(self, target);
+    }
+
+    fn reset_immediately(&mut self) {
+        Self::reset_immediately(self);
+    }
+
+    fn tick(&mut self) -> SequencerRuntimeFuture<'_, Instant> {
+        Box::pin(Self::tick(self))
     }
 }

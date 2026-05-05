@@ -10,7 +10,7 @@ use crate::{
     actors::{
         MockConductor, MockOriginSelector, MockSequencerEngineClient,
         MockUnsafePayloadGossipClient,
-        sequencer::{PayloadBuilder, RecoveryModeGuard},
+        sequencer::{PayloadBuilder, RecoveryModeGuard, TokioSequencerRuntime},
     },
 };
 
@@ -43,6 +43,7 @@ pub(super) fn test_actor() -> SequencerActor<
         is_active: true,
         recovery_mode,
         rollup_config,
+        runtime: Arc::new(TokioSequencerRuntime),
         unsafe_payload_gossip_client: MockUnsafePayloadGossipClient::new(),
         sealer: None,
         pending_stop: None,

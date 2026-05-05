@@ -21,7 +21,10 @@ mod seal;
 pub use seal::{PayloadSealer, SealState, SealStepError};
 
 mod ticker;
-pub use ticker::ScheduledTicker;
+pub use ticker::{
+    ScheduledTicker, SequencerRuntime, SequencerRuntimeFuture, SequencerTicker,
+    TokioSequencerRuntime,
+};
 
 mod pool;
 pub use pool::PoolActivation;

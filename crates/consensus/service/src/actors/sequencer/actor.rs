@@ -23,7 +23,6 @@ use crate::{
         SequencerEngineClient,
         engine::EngineClientError,
         sequencer::{
-            ScheduledTicker,
             build::{PayloadBuilder, UnsealedPayloadHandle},
             conductor::Conductor,
             error::SequencerActorError,
@@ -78,6 +77,8 @@ pub struct SequencerActor<
     pub recovery_mode: RecoveryModeGuard,
     /// The rollup configuration.
     pub rollup_config: Arc<RollupConfig>,
+    /// Runtime used for sequencer sleeps and block build ticks.
+    pub runtime: Arc<dyn super::SequencerRuntime>,
     /// A client to asynchronously sign and gossip built payloads to the network actor.
     pub unsafe_payload_gossip_client: UnsafePayloadGossipClient_,
     /// In-flight seal pipeline. [`Some`] while a sealed payload is being committed,
@@ -228,8 +229,7 @@ where
             }
             // Wait one block time before retrying the reset, but service admin queries
             // and honour cancellation throughout the backoff window.
-            let sleep = tokio::time::sleep(Duration::from_secs(self.rollup_config.block_time));
-            tokio::pin!(sleep);
+            let mut sleep = self.runtime.sleep(Duration::from_secs(self.rollup_config.block_time));
             loop {
                 select! {
                     biased;
@@ -271,7 +271,7 @@ where
 
     async fn start(mut self, _: Self::StartData) -> Result<(), Self::Error> {
         let mut build_ticker =
-            ScheduledTicker::new(Duration::from_secs(self.rollup_config.block_time));
+            self.runtime.ticker(Duration::from_secs(self.rollup_config.block_time));
 
         self.update_metrics();
 
