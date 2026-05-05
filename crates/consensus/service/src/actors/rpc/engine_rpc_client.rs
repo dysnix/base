@@ -6,22 +6,75 @@ use base_common_genesis::RollupConfig;
 use base_consensus_engine::{EngineQueries, EngineState};
 use base_consensus_rpc::EngineRpcClient;
 use base_protocol::{L2BlockInfo, OutputRoot};
-use derive_more::Constructor;
 use jsonrpsee::{
     core::RpcResult,
     types::{ErrorCode, ErrorObject},
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
+use super::QueuedRpcClientOptions;
 use crate::{EngineActorRequest, EngineRpcRequest};
 
 /// Queue-based implementation of the [`EngineRpcClient`] trait. This handles all channel-based
 /// operations, providing a nice facade for callers. This also exposes only a subset of the
 /// supported [`EngineActorRequest`] operations to limit the power of callers to RPC-type requests.
-#[derive(Clone, Constructor, Debug)]
+#[derive(Clone, Debug)]
 pub struct QueuedEngineRpcClient {
     /// A channel to use to send the `EngineActor` requests.
     pub engine_actor_request_tx: mpsc::Sender<EngineActorRequest>,
+    /// Runtime options for request/response handling.
+    pub options: QueuedRpcClientOptions,
+}
+
+impl QueuedEngineRpcClient {
+    /// Creates a new queued engine RPC client with historical no-timeout behavior.
+    pub fn new(engine_actor_request_tx: mpsc::Sender<EngineActorRequest>) -> Self {
+        Self::new_with_options(engine_actor_request_tx, QueuedRpcClientOptions::default())
+    }
+
+    /// Creates a new queued engine RPC client with explicit runtime options.
+    pub const fn new_with_options(
+        engine_actor_request_tx: mpsc::Sender<EngineActorRequest>,
+        options: QueuedRpcClientOptions,
+    ) -> Self {
+        Self { engine_actor_request_tx, options }
+    }
+
+    /// Awaits an engine actor response using the configured timeout policy.
+    pub async fn receive_engine_response<T>(
+        &self,
+        response_rx: oneshot::Receiver<T>,
+        response_name: &'static str,
+    ) -> RpcResult<T> {
+        let receive = async {
+            response_rx.await.map_err(|_| {
+                error!(
+                    target: "block_engine",
+                    response_name,
+                    "Failed to receive response from engine rpc"
+                );
+                ErrorObject::from(ErrorCode::InternalError)
+            })
+        };
+
+        if let Some(timeout) = self.options.request_timeout {
+            tokio::time::timeout(timeout, receive).await.map_err(|_| {
+                error!(
+                    target: "block_engine",
+                    response_name,
+                    timeout_ms = timeout.as_millis(),
+                    "Timed out waiting for engine rpc response"
+                );
+                ErrorObject::owned(
+                    ErrorCode::InternalError.code(),
+                    "engine rpc response timed out",
+                    None::<()>,
+                )
+            })?
+        } else {
+            receive.await
+        }
+    }
 }
 
 #[async_trait]
@@ -39,10 +92,7 @@ impl EngineRpcClient for QueuedEngineRpcClient {
                 ErrorObject::from(ErrorCode::InternalError)
             })?;
 
-        config_rx.await.map_err(|_| {
-            error!(target: "block_engine", "Failed to receive config from engine rpc");
-            ErrorObject::from(ErrorCode::InternalError)
-        })
+        self.receive_engine_response(config_rx, "config").await
     }
 
     async fn get_state(&self) -> RpcResult<EngineState> {
@@ -58,10 +108,7 @@ impl EngineRpcClient for QueuedEngineRpcClient {
                 ErrorObject::from(ErrorCode::InternalError)
             })?;
 
-        state_rx.await.map_err(|_| {
-            error!(target: "block_engine", "Failed to receive state from engine rpc");
-            ErrorObject::from(ErrorCode::InternalError)
-        })
+        self.receive_engine_response(state_rx, "state").await
     }
 
     async fn output_at_block(
@@ -80,10 +127,7 @@ impl EngineRpcClient for QueuedEngineRpcClient {
                 ErrorObject::from(ErrorCode::InternalError)
             })?;
 
-        output_rx.await.map_err(|_| {
-            error!(target: "block_engine", "Failed to receive output at block from engine rpc");
-            ErrorObject::from(ErrorCode::InternalError)
-        })
+        self.receive_engine_response(output_rx, "output_at_block").await
     }
 
     async fn dev_get_task_queue_length(&self) -> RpcResult<usize> {
@@ -96,10 +140,7 @@ impl EngineRpcClient for QueuedEngineRpcClient {
             .await
             .map_err(|_| ErrorObject::from(ErrorCode::InternalError))?;
 
-        length_rx.await.map_err(|_| {
-            error!(target: "block_engine", "Failed to receive task queue length from engine rpc");
-            ErrorObject::from(ErrorCode::InternalError)
-        })
+        self.receive_engine_response(length_rx, "task_queue_length").await
     }
 
     async fn dev_subscribe_to_engine_queue_length(&self) -> RpcResult<watch::Receiver<usize>> {
@@ -112,10 +153,7 @@ impl EngineRpcClient for QueuedEngineRpcClient {
             .await
             .map_err(|_| ErrorObject::from(ErrorCode::InternalError))?;
 
-        sub_rx.await.map_err(|_| {
-            error!(target: "block_engine", "Failed to receive queue length receiver from engine rpc");
-            ErrorObject::from(ErrorCode::InternalError)
-        })
+        self.receive_engine_response(sub_rx, "queue_length_receiver").await
     }
     async fn dev_subscribe_to_engine_state(&self) -> RpcResult<watch::Receiver<EngineState>> {
         let (sub_tx, sub_rx) = oneshot::channel();
@@ -127,9 +165,33 @@ impl EngineRpcClient for QueuedEngineRpcClient {
             .await
             .map_err(|_| ErrorObject::from(ErrorCode::InternalError))?;
 
-        sub_rx.await.map_err(|_| {
-            error!(target: "block_engine", "Failed to receive state receiver from engine rpc");
-            ErrorObject::from(ErrorCode::InternalError)
-        })
+        self.receive_engine_response(sub_rx, "state_receiver").await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use base_consensus_rpc::EngineRpcClient as _;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn get_state_times_out_when_response_is_not_sent() {
+        let (engine_actor_request_tx, mut engine_actor_request_rx) = mpsc::channel(1);
+        let client = QueuedEngineRpcClient::new_with_options(
+            engine_actor_request_tx,
+            QueuedRpcClientOptions { request_timeout: Some(Duration::ZERO) },
+        );
+
+        let result = client.get_state().await;
+
+        assert!(result.is_err(), "client should return timeout error");
+        let request = engine_actor_request_rx.recv().await.expect("request should be queued");
+        assert!(
+            matches!(request, EngineActorRequest::RpcRequest(_)),
+            "expected queued engine RPC request"
+        );
     }
 }
