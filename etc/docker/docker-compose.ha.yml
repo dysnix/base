@@ -155,12 +155,12 @@ services:
       - --http
       - --http.addr=0.0.0.0
       - --http.port=${L2_SEQ1_HTTP_PORT}
-      - --http.api=admin,eth,web3,net,rpc,debug,txpool,miner
+      - --http.api=admin,eth,web3,net,rpc,debug,trace,txpool,miner
       - --http.corsdomain=*
       - --ws
       - --ws.addr=0.0.0.0
       - --ws.port=${L2_SEQ1_WS_PORT}
-      - --ws.api=eth,web3,net,txpool,debug
+      - --ws.api=eth,web3,net,txpool,debug,trace
       - --ws.origins=*
       - --authrpc.port=${L2_SEQ1_AUTH_PORT}
       - --authrpc.addr=0.0.0.0
@@ -287,12 +287,12 @@ services:
       - --http
       - --http.addr=0.0.0.0
       - --http.port=${L2_SEQ2_HTTP_PORT}
-      - --http.api=admin,eth,web3,net,rpc,debug,txpool,miner
+      - --http.api=admin,eth,web3,net,rpc,debug,trace,txpool,miner
       - --http.corsdomain=*
       - --ws
       - --ws.addr=0.0.0.0
       - --ws.port=${L2_SEQ2_WS_PORT}
-      - --ws.api=eth,web3,net,txpool,debug
+      - --ws.api=eth,web3,net,txpool,debug,trace
       - --ws.origins=*
       - --authrpc.port=${L2_SEQ2_AUTH_PORT}
       - --authrpc.addr=0.0.0.0

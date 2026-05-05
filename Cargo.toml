@@ -158,6 +158,9 @@ base-common-signer = { path = "crates/common/signer" }
 base-common-chains = { path = "crates/common/chains" }
 base-common-network = { path = "crates/common/network" }
 base-access-lists = { path = "crates/common/access-lists" }
+base-precompiles-macros = { path = "crates/common/precompiles-macros" }
+base-precompiles-contracts = { path = "crates/common/precompiles-contracts", default-features = false }
+base-precompiles = { path = "crates/common/precompiles", default-features = false }
 base-common-rpc-types = { path = "crates/common/rpc-types" }
 base-common-flashblocks = { path = "crates/common/flashblocks" }
 base-common-evm = { path = "crates/common/evm", default-features = false }
@@ -287,6 +290,7 @@ revm-primitives = { version = "22.0.0", default-features = false }
 revm-context-interface = { version = "14.0.0", default-features = false }
 
 # alloy
+alloy = { version = "1.8", default-features = false }
 alloy-signer = "1.8"
 alloy-pubsub = "1.8"
 alloy-network = "1.8"
@@ -595,6 +599,10 @@ async-stream = "0.3"
 async-channel = "2.5"
 alloc-no-stdlib = "2.0"
 libp2p-stream = "0.4.0-alpha"
+quote = "1"
+proc-macro2 = "1"
+scoped-tls = "1.0"
+syn = { version = "2", features = ["full", "extra-traits"] }
 toml = { version = "1.0", default-features = false }
 ark-ff = { version = "0.5.0", default-features = false }
 unsigned-varint = { version = "0.8", default-features = false }

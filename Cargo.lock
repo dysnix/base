@@ -3313,6 +3313,7 @@ dependencies = [
  "base-common-chains",
  "base-common-consensus",
  "base-common-flz",
+ "base-precompiles",
  "reth-evm",
  "revm",
  "rstest",
@@ -4636,6 +4637,49 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "url",
+]
+
+[[package]]
+name = "base-precompiles"
+version = "0.0.0"
+dependencies = [
+ "alloy",
+ "alloy-evm",
+ "alloy-primitives",
+ "alloy-signer",
+ "alloy-signer-local",
+ "base-precompiles-contracts",
+ "base-precompiles-macros",
+ "criterion",
+ "derive_more 2.1.1",
+ "eyre",
+ "proptest",
+ "rand 0.8.6",
+ "revm",
+ "scoped-tls",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "base-precompiles-contracts"
+version = "0.0.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "serde",
+]
+
+[[package]]
+name = "base-precompiles-macros"
+version = "0.0.0"
+dependencies = [
+ "alloy",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

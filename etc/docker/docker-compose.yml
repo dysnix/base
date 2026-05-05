@@ -287,12 +287,12 @@ services:
       - --http
       - --http.addr=0.0.0.0
       - --http.port=${L2_BUILDER_HTTP_PORT}
-      - --http.api=admin,eth,web3,net,rpc,debug,txpool,miner
+      - --http.api=admin,eth,web3,net,rpc,debug,trace,txpool,miner
       - --http.corsdomain=*
       - --ws
       - --ws.addr=0.0.0.0
       - --ws.port=${L2_BUILDER_WS_PORT}
-      - --ws.api=eth,web3,net,txpool,debug
+      - --ws.api=eth,web3,net,txpool,debug,trace
       - --ws.origins=*
       - --authrpc.port=${L2_BUILDER_AUTH_PORT}
       - --authrpc.addr=0.0.0.0
@@ -471,12 +471,12 @@ services:
       - --http.port=${L2_CLIENT_HTTP_PORT}
       # Devnet keeps `miner` on HTTP so local services can read and update
       # the dynamic DA and gas-limit knobs end-to-end.
-      - --http.api=admin,eth,web3,net,rpc,debug,txpool,miner
+      - --http.api=admin,eth,web3,net,rpc,debug,trace,txpool,miner
       - --http.corsdomain=*
       - --ws
       - --ws.addr=0.0.0.0
       - --ws.port=${L2_CLIENT_WS_PORT}
-      - --ws.api=eth,web3,net,txpool,debug
+      - --ws.api=eth,web3,net,txpool,debug,trace
       - --ws.origins=*
       - --authrpc.port=${L2_CLIENT_AUTH_PORT}
       - --authrpc.addr=0.0.0.0

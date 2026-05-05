@@ -1,0 +1,43 @@
+[package]
+name = "base-precompiles"
+description = "Base EVM precompile implementations for B20 tokens and B403 policies"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base-precompiles-macros.workspace = true
+base-precompiles-contracts.workspace = true
+alloy = { workspace = true, features = ["sol-types", "consensus", "k256"] }
+alloy-evm = { workspace = true, features = ["std"] }
+revm.workspace = true
+
+tracing.workspace = true
+thiserror.workspace = true
+derive_more.workspace = true
+scoped-tls.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+alloy-signer.workspace = true
+alloy-signer-local.workspace = true
+alloy-primitives = { workspace = true, features = ["rand"] }
+eyre.workspace = true
+rand_08.workspace = true
+proptest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+default = ["rpc"]
+test-utils = ["alloy/getrandom"]
+rpc = ["base-precompiles-contracts/rpc"]
+
+[[test]]
+name = "storage"
+required-features = ["test-utils"]

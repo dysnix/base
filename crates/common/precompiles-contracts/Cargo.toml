@@ -1,0 +1,25 @@
+[package]
+name = "base-precompiles-contracts"
+description = "Base B precompile ABI bindings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+alloy-sol-types = { workspace = true, features = ["json"] }
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+rpc = []
+serde = [
+	"alloy-primitives/serde",
+	"dep:serde",
+]

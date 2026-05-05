@@ -22,6 +22,7 @@ alloy-primitives.workspace = true
 # base
 base-common-flz.workspace = true
 base-common-chains.workspace = true
+base-precompiles = { workspace = true, optional = true }
 base-common-consensus = { workspace = true, features = ["evm"] }
 
 # revm
@@ -54,6 +55,7 @@ std = [
 	"base-common-chains/std",
 	"base-common-consensus/std",
 	"base-common-flz/std",
+	"base-precompiles",
 	"revm/std",
 	"serde?/std",
 	"strum/std",
