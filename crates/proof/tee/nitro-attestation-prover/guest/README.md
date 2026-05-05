@@ -135,13 +135,13 @@ Rust embeds absolute file paths into the binary for panic messages. The
 Justfile passes `--remap-path-prefix` flags via `RUSTFLAGS` to normalize
 these paths to `/build` and `/registry`.
 
-### Deterministic metadata hashing
+### Fixed build path
 
 Cargo includes the absolute filesystem path of path dependencies in its
-`-C metadata` hash, which feeds into symbol mangling. The build uses a
-`RUSTC_WRAPPER` (`tools/rustc-deterministic-metadata.sh`) that replaces
-`-C metadata` with a deterministic hash derived from the crate name,
-version, and repo-relative path.
+`-C metadata` hash, which feeds into symbol mangling. Docker ensures the
+repo is always bind-mounted at `/build/base`, so this path is constant
+across machines. This is why native builds are not supported — different
+checkout paths would produce different ELFs.
 
 ### Diagnosing reproducibility issues
 

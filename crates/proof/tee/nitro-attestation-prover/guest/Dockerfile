@@ -9,13 +9,14 @@
 #   - exact risc0-zkvm version (Cargo.toml + Cargo.lock)
 #   - codegen-units = 1
 #   - --remap-path-prefix for the repo root and CARGO_HOME
-#   - a RUSTC_WRAPPER that replaces -C metadata with a deterministic hash
 #
 # The one thing the Justfile cannot pin is the *toolchain itself* and the
 # surrounding shell environment. This image provides a constant toolchain
 # at constant filesystem paths so the same source tree always produces the
 # same `shasum -a 256 target/.../base-proof-tee-nitro-verifier-guest`,
 # regardless of host OS (macOS / Linux / Windows) or host CPU architecture.
+# It also ensures the repo is always mounted at /build/base, fixing the
+# absolute-path component of Cargo's -C metadata hash.
 #
 # Build the image (once)
 # ----------------------
@@ -53,8 +54,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 # code rustc needs to link is proc-macro dylibs and the host-side
 # `compute-image-id` binary, for which `gcc` + `libc6-dev` is enough.
 #
-#   - perl + libdigest-sha-perl: provide `shasum -a 256` used by the
-#     Justfile's tools/rustc-deterministic-metadata.sh wrapper.
 #   - git: the Justfile shells out to `git rev-parse --show-toplevel`.
 #   - curl, ca-certificates, xz-utils: fetch rustup / rzup / just installers.
 #   - gcc, libc6-dev, pkg-config, libssl-dev: link proc-macro dylibs and
@@ -73,10 +72,8 @@ RUN apt-get update \
         gcc \
         git \
         libc6-dev \
-        libdigest-sha-perl \
         libssl-dev \
         mold \
-        perl \
         pkg-config \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
