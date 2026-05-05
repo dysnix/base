@@ -78,7 +78,8 @@ impl ProofRequestRepo {
     ///
     /// When a `session_id` is provided in the request, it is used as the proof
     /// request UUID and the insert uses `ON CONFLICT (id) DO NOTHING` so that
-    /// duplicate submissions return the existing request ID without error.
+    /// duplicate submissions return the existing request ID without inserting
+    /// another outbox row.
     pub async fn create_with_outbox(&self, req: CreateProofRequest) -> Result<Uuid> {
         let id = req.session_id.unwrap_or_else(Uuid::new_v4);
 
@@ -214,20 +215,26 @@ impl ProofRequestRepo {
             return Ok(None);
         };
 
-        let session_id: i64 = sqlx::query_scalar(
+        let session_id: Option<i64> = sqlx::query_scalar(
             r#"
             INSERT INTO proof_sessions (
                 proof_request_id, session_type, backend_session_id, status, metadata
             )
             VALUES ($1, $2, NULL, $3, NULL)
+            ON CONFLICT DO NOTHING
             RETURNING id
             "#,
         )
         .bind(proof_request_id)
         .bind(session_type.as_str())
         .bind(SessionStatus::Submitting.as_str())
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
+
+        let Some(session_id) = session_id else {
+            tx.commit().await?;
+            return Ok(None);
+        };
 
         tx.commit().await?;
 
@@ -270,7 +277,7 @@ impl ProofRequestRepo {
             return Ok(false);
         };
 
-        sqlx::query(
+        let request_result = sqlx::query(
             r#"
             UPDATE proof_requests
             SET status = $1
@@ -283,8 +290,30 @@ impl ProofRequestRepo {
         .execute(&mut *tx)
         .await?;
 
+        if request_result.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+
         tx.commit().await?;
         Ok(true)
+    }
+
+    /// Refresh a SUBMITTING session while backend submission is still in progress.
+    pub async fn touch_submitting_session(&self, proof_session_id: i64) -> Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE proof_sessions
+            SET updated_at = NOW()
+            WHERE id = $1
+              AND status = 'SUBMITTING'
+            "#,
+        )
+        .bind(proof_session_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 
     /// Fail a SUBMITTING stage before it reaches the backend.
@@ -340,6 +369,23 @@ impl ProofRequestRepo {
     /// Enqueue the SNARK stage once the STARK receipt has been persisted.
     pub async fn enqueue_snark_outbox_if_needed(&self, id: Uuid) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
+
+        let locked_request: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM proof_requests
+            WHERE id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if locked_request.is_none() {
+            tx.commit().await?;
+            return Ok(false);
+        }
 
         let should_enqueue = sqlx::query_scalar::<_, bool>(
             r#"
@@ -496,6 +542,14 @@ impl ProofRequestRepo {
                 error_message = $4,
                 completed_at = NOW()
             WHERE id = $5 AND status = $6
+              AND (
+                  (proof_type = 'op_succinct_sp1_cluster_compressed'
+                   AND COALESCE($1, stark_receipt) IS NOT NULL)
+                  OR
+                  (proof_type = 'op_succinct_sp1_cluster_snark_groth16'
+                   AND COALESCE($1, stark_receipt) IS NOT NULL
+                   AND COALESCE($2, snark_receipt) IS NOT NULL)
+              )
             "#,
         )
         .bind(&update.stark_receipt)
@@ -638,7 +692,7 @@ impl ProofRequestRepo {
         let row = sqlx::query(
             r#"
             SELECT id, proof_request_id, session_type, backend_session_id,
-                   status, error_message, metadata, created_at, completed_at
+                   status, error_message, metadata, created_at, updated_at, completed_at
             FROM proof_sessions
             WHERE backend_session_id = $1
             "#,
@@ -658,7 +712,7 @@ impl ProofRequestRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, proof_request_id, session_type, backend_session_id,
-                   status, error_message, metadata, created_at, completed_at
+                   status, error_message, metadata, created_at, updated_at, completed_at
             FROM proof_sessions
             WHERE proof_request_id = $1
             ORDER BY created_at ASC
@@ -676,7 +730,7 @@ impl ProofRequestRepo {
         let rows = sqlx::query(
             r#"
             SELECT id, proof_request_id, session_type, backend_session_id,
-                   status, error_message, metadata, created_at, completed_at
+                   status, error_message, metadata, created_at, updated_at, completed_at
             FROM proof_sessions
             WHERE status = $1
             ORDER BY created_at ASC
@@ -757,11 +811,12 @@ impl ProofRequestRepo {
                 ps.id AS session_id, ps.session_type, ps.backend_session_id,
                 ps.status AS session_status, ps.error_message AS session_error_message,
                 ps.metadata, ps.created_at AS session_created_at,
+                ps.updated_at AS session_updated_at,
                 ps.completed_at AS session_completed_at
             FROM proof_sessions ps
             JOIN proof_requests pr ON pr.id = ps.proof_request_id
             WHERE ps.status = 'SUBMITTING'
-              AND ps.created_at < NOW() - INTERVAL '1 minute' * $1
+              AND ps.updated_at < NOW() - INTERVAL '1 minute' * $1
               AND pr.status NOT IN ('SUCCEEDED', 'FAILED')
             ORDER BY ps.created_at ASC
             "#,
@@ -791,7 +846,7 @@ impl ProofRequestRepo {
             FROM proof_sessions ps
             JOIN proof_requests pr ON pr.id = ps.proof_request_id
             WHERE ps.id = $1
-            FOR UPDATE
+            FOR UPDATE OF ps, pr
             "#,
         )
         .bind(proof_session_id)
@@ -1038,6 +1093,7 @@ impl ProofRequestRepo {
         &self,
         backend_session_id: &str,
         update_receipt: UpdateReceipt,
+        metadata: Option<serde_json::Value>,
     ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
 
@@ -1052,6 +1108,16 @@ impl ProofRequestRepo {
                 completed_at = CASE WHEN $3 IN ('SUCCEEDED', 'FAILED') THEN NOW() ELSE completed_at END
             WHERE id = $5
               AND status = 'RUNNING'
+              AND (
+                  $3 <> 'SUCCEEDED'
+                  OR
+                  (proof_type = 'op_succinct_sp1_cluster_compressed'
+                   AND COALESCE($1, stark_receipt) IS NOT NULL)
+                  OR
+                  (proof_type = 'op_succinct_sp1_cluster_snark_groth16'
+                   AND COALESCE($1, stark_receipt) IS NOT NULL
+                   AND COALESCE($2, snark_receipt) IS NOT NULL)
+              )
             "#,
         )
         .bind(&update_receipt.stark_receipt)
@@ -1067,18 +1133,26 @@ impl ProofRequestRepo {
             return Ok(false);
         }
 
-        sqlx::query(
+        let session_result = sqlx::query(
             r#"
             UPDATE proof_sessions
             SET status = $1,
+                metadata = COALESCE($2, metadata),
                 completed_at = NOW()
-            WHERE backend_session_id = $2
+            WHERE backend_session_id = $3
+              AND status = 'RUNNING'
             "#,
         )
         .bind(SessionStatus::Completed.as_str())
+        .bind(&metadata)
         .bind(backend_session_id)
         .execute(&mut *tx)
         .await?;
+
+        if session_result.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
 
         tx.commit().await?;
 
@@ -1160,6 +1234,9 @@ impl ProofRequestRepo {
     ///
     /// Returns entries in order by `sequence_id` (FIFO), excluding entries that
     /// have exceeded `max_retries` attempts.
+    ///
+    /// This is intentionally an at-least-once read. Multiple readers may observe
+    /// the same row, and downstream durable-stage creation must be idempotent.
     pub async fn get_unprocessed_outbox_entries(
         &self,
         limit: i64,
@@ -1290,6 +1367,7 @@ fn row_to_proof_session(row: &sqlx::postgres::PgRow) -> Result<ProofSession> {
         error_message: row.get("error_message"),
         metadata: row.get("metadata"),
         created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
         completed_at: row.get("completed_at"),
     })
 }
@@ -1316,6 +1394,7 @@ fn row_to_stuck_submission(row: &sqlx::postgres::PgRow) -> Result<StuckProofSubm
             error_message: row.get("session_error_message"),
             metadata: row.get("metadata"),
             created_at: row.get("session_created_at"),
+            updated_at: row.get("session_updated_at"),
             completed_at: row.get("session_completed_at"),
         },
     })

@@ -54,6 +54,15 @@ impl ProofRequestManager {
                         anyhow::anyhow!("Proof request not found after processing")
                     })?;
 
+                if !has_required_receipts(&updated_proof_request) {
+                    warn!(
+                        proof_request_id = %proof_request.id,
+                        proof_type = %updated_proof_request.proof_type,
+                        "Backend reported success before required receipts were persisted"
+                    );
+                    return Ok(());
+                }
+
                 // Mark as succeeded with fresh receipts
                 let update = UpdateReceipt {
                     id: proof_request.id,
@@ -123,6 +132,15 @@ impl ProofRequestManager {
         self.backend_registry
             .get(backend_type)
             .ok_or_else(|| anyhow::anyhow!("Backend not found for proof type: {proof_type:?}"))
+    }
+}
+
+fn has_required_receipts(proof_request: &ProofRequest) -> bool {
+    match proof_request.proof_type {
+        ProofType::OpSuccinctSp1ClusterCompressed => proof_request.stark_receipt.is_some(),
+        ProofType::OpSuccinctSp1ClusterSnarkGroth16 => {
+            proof_request.stark_receipt.is_some() && proof_request.snark_receipt.is_some()
+        }
     }
 }
 

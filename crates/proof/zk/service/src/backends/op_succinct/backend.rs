@@ -220,8 +220,15 @@ impl ProvingBackend for OpSuccinctBackend {
             let has_stark_completed = updated_sessions.iter().any(|s| {
                 s.session_type == SessionType::Stark && s.status == DbSessionStatus::Completed
             });
-            let has_snark_session =
-                updated_sessions.iter().any(|s| s.session_type == SessionType::Snark);
+            let has_snark_session = updated_sessions.iter().any(|s| {
+                s.session_type == SessionType::Snark
+                    && matches!(
+                        s.status,
+                        DbSessionStatus::Submitting
+                            | DbSessionStatus::Running
+                            | DbSessionStatus::Completed
+                    )
+            });
 
             if has_stark_completed && !has_snark_session {
                 info!(
@@ -515,14 +522,6 @@ impl OpSuccinctBackend {
                     obj.insert("total_elapsed_secs".to_string(), json!(total));
                 }
 
-                let update = UpdateProofSession {
-                    backend_session_id: backend_session_id.to_string(),
-                    status: DbSessionStatus::Completed,
-                    error_message: None,
-                    metadata: Some(updated_metadata),
-                };
-                repo.update_proof_session(update).await?;
-
                 let update_receipt = match session.session_type {
                     SessionType::Stark => UpdateReceipt {
                         id: proof_request_id,
@@ -539,7 +538,22 @@ impl OpSuccinctBackend {
                         error_message: None,
                     },
                 };
-                repo.update_receipt_if_running(update_receipt).await?;
+                let updated = repo
+                    .complete_session_and_update_receipt(
+                        backend_session_id,
+                        update_receipt,
+                        Some(updated_metadata),
+                    )
+                    .await?;
+
+                if !updated {
+                    warn!(
+                        proof_request_id = %proof_request_id,
+                        session_id = %backend_session_id,
+                        "SP1 cluster proof completed but database state was not updated"
+                    );
+                    return Ok(());
+                }
 
                 info!(
                     proof_request_id = %proof_request_id,
@@ -572,18 +586,17 @@ impl OpSuccinctBackend {
             return ProofProcessingResult { status: ProofStatus::Pending, error_message: None };
         }
 
-        // Any failure → FAILED.
-        for session in sessions {
-            if session.status == DbSessionStatus::Failed {
-                return ProofProcessingResult {
-                    status: ProofStatus::Failed,
-                    error_message: session.error_message.clone(),
-                };
-            }
-        }
-
         match proof_type {
             ProofType::OpSuccinctSp1ClusterCompressed => {
+                for session in sessions {
+                    if session.status == DbSessionStatus::Failed {
+                        return ProofProcessingResult {
+                            status: ProofStatus::Failed,
+                            error_message: session.error_message.clone(),
+                        };
+                    }
+                }
+
                 let all_succeeded = sessions.iter().all(|s| s.status == DbSessionStatus::Completed);
                 if all_succeeded {
                     ProofProcessingResult { status: ProofStatus::Succeeded, error_message: None }
@@ -592,6 +605,15 @@ impl OpSuccinctBackend {
                 }
             }
             ProofType::OpSuccinctSp1ClusterSnarkGroth16 => {
+                if let Some(failed_stark) = sessions.iter().find(|s| {
+                    s.session_type == SessionType::Stark && s.status == DbSessionStatus::Failed
+                }) {
+                    return ProofProcessingResult {
+                        status: ProofStatus::Failed,
+                        error_message: failed_stark.error_message.clone(),
+                    };
+                }
+
                 let stark_done = sessions.iter().any(|s| {
                     s.session_type == SessionType::Stark && s.status == DbSessionStatus::Completed
                 });
@@ -744,6 +766,7 @@ mod tests {
             error_message: None,
             metadata: None,
             created_at: now,
+            updated_at: now,
             completed_at: None,
         }
     }
@@ -849,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn test_determine_status_snark_snark_failed_returns_failed() {
+    fn test_determine_status_snark_snark_failed_returns_running_for_retry() {
         let sessions = vec![
             make_session(SessionType::Stark, DbSessionStatus::Completed),
             make_failed_session(SessionType::Snark, "aggregation error"),
@@ -858,8 +881,8 @@ mod tests {
             ProofType::OpSuccinctSp1ClusterSnarkGroth16,
             &sessions,
         );
-        assert_eq!(result.status, ProofStatus::Failed);
-        assert_eq!(result.error_message.as_deref(), Some("aggregation error"));
+        assert_eq!(result.status, ProofStatus::Running);
+        assert!(result.error_message.is_none());
     }
 
     #[test]

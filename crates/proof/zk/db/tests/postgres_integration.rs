@@ -397,6 +397,7 @@ async fn test_fail_session_and_request_skips_terminal() {
             status: ProofStatus::Succeeded,
             error_message: None,
         },
+        None,
     )
     .await
     .unwrap();
@@ -434,6 +435,7 @@ async fn test_complete_session_and_update_receipt() {
                 status: ProofStatus::Succeeded,
                 error_message: None,
             },
+            Some(serde_json::json!({"completed": true})),
         )
         .await
         .unwrap();
@@ -447,6 +449,7 @@ async fn test_complete_session_and_update_receipt() {
     let session = repo.get_session_by_backend_id(&backend_id).await.unwrap().unwrap();
     assert_eq!(session.status, SessionStatus::Completed);
     assert!(session.completed_at.is_some());
+    assert_eq!(session.metadata.unwrap()["completed"].as_bool(), Some(true));
 }
 
 #[tokio::test]
@@ -468,6 +471,7 @@ async fn test_complete_session_and_update_receipt_skips_non_running() {
                 status: ProofStatus::Succeeded,
                 error_message: None,
             },
+            None,
         )
         .await
         .unwrap();
@@ -514,6 +518,172 @@ async fn test_create_with_outbox_idempotent() {
 
     assert_eq!(id1, explicit_id);
     assert_eq!(id2, explicit_id); // idempotent — same ID returned
+}
+
+#[tokio::test]
+#[ignore = "requires a running Postgres with the prover schema (set DATABASE_URL); run with `cargo nextest run --run-ignored all -p base-zk-db --test postgres_integration --test-threads=1`"]
+async fn test_concurrent_submitting_stage_creation_is_idempotent() {
+    let pool = test_pool().await;
+    let repo = test_repo(pool);
+
+    let id = repo.create(compressed_request()).await.unwrap();
+
+    let first = repo.create_submitting_stage_for_outbox(id, SessionType::Stark);
+    let second = repo.create_submitting_stage_for_outbox(id, SessionType::Stark);
+    let (first, second) = tokio::join!(first, second);
+
+    let created = [first.unwrap(), second.unwrap()].into_iter().filter(Option::is_some).count();
+    assert_eq!(created, 1, "exactly one caller should claim the durable stage");
+
+    let sessions = repo.get_sessions_for_request(id).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].status, SessionStatus::Submitting);
+
+    let request = repo.get(id).await.unwrap().unwrap();
+    assert_eq!(request.status, ProofStatus::Pending);
+}
+
+#[tokio::test]
+#[ignore = "requires a running Postgres with the prover schema (set DATABASE_URL); run with `cargo nextest run --run-ignored all -p base-zk-db --test postgres_integration --test-threads=1`"]
+async fn test_concurrent_snark_enqueue_is_serialized() {
+    let pool = test_pool().await;
+    let repo = test_repo(pool);
+
+    let req_id = repo.create(snark_request()).await.unwrap();
+    let stark_backend_id = format!("stark-enqueue-{}", Uuid::new_v4());
+    setup_running_session(&repo, req_id, SessionType::Stark, &stark_backend_id).await;
+
+    repo.complete_session_and_update_receipt(
+        &stark_backend_id,
+        UpdateReceipt {
+            id: req_id,
+            stark_receipt: Some(vec![0x01]),
+            snark_receipt: None,
+            status: ProofStatus::Running,
+            error_message: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    let first = repo.enqueue_snark_outbox_if_needed(req_id);
+    let second = repo.enqueue_snark_outbox_if_needed(req_id);
+    let (first, second) = tokio::join!(first, second);
+
+    assert_eq!(
+        [first.unwrap(), second.unwrap()].into_iter().filter(|inserted| *inserted).count(),
+        1,
+        "exactly one caller should enqueue the SNARK stage"
+    );
+
+    let entries = repo.get_unprocessed_outbox_entries(100, 3).await.unwrap();
+    let snark_entries = entries
+        .iter()
+        .filter(|entry| {
+            entry.proof_request_id == req_id
+                && entry.request_params.get("task_type").and_then(serde_json::Value::as_str)
+                    == Some("submit_snark")
+        })
+        .count();
+    assert_eq!(snark_entries, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires a running Postgres with the prover schema (set DATABASE_URL); run with `cargo nextest run --run-ignored all -p base-zk-db --test postgres_integration --test-threads=1`"]
+async fn test_submitting_session_heartbeat_only_touches_submitting() {
+    let pool = test_pool().await;
+    let repo = test_repo(pool);
+
+    let id = repo.create(compressed_request()).await.unwrap();
+    let claimed = repo
+        .create_submitting_stage_for_outbox(id, SessionType::Stark)
+        .await
+        .unwrap()
+        .expect("stage should be claimed");
+
+    assert!(repo.touch_submitting_session(claimed.proof_session_id).await.unwrap());
+    assert!(
+        repo.mark_submitting_session_running(
+            claimed.proof_session_id,
+            &format!("heartbeat-{}", Uuid::new_v4()),
+            None,
+        )
+        .await
+        .unwrap()
+    );
+    assert!(!repo.touch_submitting_session(claimed.proof_session_id).await.unwrap());
+}
+
+#[tokio::test]
+#[ignore = "requires a running Postgres with the prover schema (set DATABASE_URL); run with `cargo nextest run --run-ignored all -p base-zk-db --test postgres_integration --test-threads=1`"]
+async fn test_succeeded_transition_requires_snark_receipt_for_snark_requests() {
+    let pool = test_pool().await;
+    let repo = test_repo(pool);
+
+    let req_id = repo.create(snark_request()).await.unwrap();
+    let stark_backend_id = format!("stark-receipt-{}", Uuid::new_v4());
+    setup_running_session(&repo, req_id, SessionType::Stark, &stark_backend_id).await;
+
+    let updated = repo
+        .complete_session_and_update_receipt(
+            &stark_backend_id,
+            UpdateReceipt {
+                id: req_id,
+                stark_receipt: Some(vec![0x01]),
+                snark_receipt: None,
+                status: ProofStatus::Succeeded,
+                error_message: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!updated, "SNARK request should not succeed without a SNARK receipt");
+
+    let request = repo.get(req_id).await.unwrap().unwrap();
+    assert_eq!(request.status, ProofStatus::Running);
+
+    let session = repo.get_session_by_backend_id(&stark_backend_id).await.unwrap().unwrap();
+    assert_eq!(session.status, SessionStatus::Running);
+}
+
+#[tokio::test]
+#[ignore = "requires a running Postgres with the prover schema (set DATABASE_URL); run with `cargo nextest run --run-ignored all -p base-zk-db --test postgres_integration --test-threads=1`"]
+async fn test_snark_enqueue_allows_failed_snark_attempts() {
+    let pool = test_pool().await;
+    let repo = test_repo(pool);
+
+    let req_id = repo.create(snark_request()).await.unwrap();
+    let stark_backend_id = format!("stark-retry-{}", Uuid::new_v4());
+    setup_running_session(&repo, req_id, SessionType::Stark, &stark_backend_id).await;
+    repo.complete_session_and_update_receipt(
+        &stark_backend_id,
+        UpdateReceipt {
+            id: req_id,
+            stark_receipt: Some(vec![0x01]),
+            snark_receipt: None,
+            status: ProofStatus::Running,
+            error_message: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    let failed_snark_backend_id = format!("snark-failed-{}", Uuid::new_v4());
+    setup_running_session(&repo, req_id, SessionType::Snark, &failed_snark_backend_id).await;
+    repo.update_proof_session(UpdateProofSession {
+        backend_session_id: failed_snark_backend_id,
+        status: SessionStatus::Failed,
+        error_message: Some("retryable failure".to_string()),
+        metadata: None,
+    })
+    .await
+    .unwrap();
+
+    assert!(repo.enqueue_snark_outbox_if_needed(req_id).await.unwrap());
 }
 
 #[tokio::test]
@@ -672,6 +842,7 @@ async fn test_full_snark_pipeline() {
             status: ProofStatus::Running, // still running — SNARK stage not done
             error_message: None,
         },
+        None,
     )
     .await
     .unwrap();
@@ -696,6 +867,7 @@ async fn test_full_snark_pipeline() {
             status: ProofStatus::Succeeded,
             error_message: None,
         },
+        None,
     )
     .await
     .unwrap();

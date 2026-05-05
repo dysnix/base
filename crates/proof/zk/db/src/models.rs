@@ -272,6 +272,8 @@ pub struct ProofSession {
     pub metadata: Option<serde_json::Value>,
     /// Timestamp when the session was created.
     pub created_at: DateTime<Utc>,
+    /// Timestamp when the session was last updated.
+    pub updated_at: DateTime<Utc>,
     /// Timestamp when the session completed.
     pub completed_at: Option<DateTime<Utc>>,
 }

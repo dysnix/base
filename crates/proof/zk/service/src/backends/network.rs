@@ -222,8 +222,15 @@ impl ProvingBackend for NetworkBackend {
             let has_stark_completed = updated_sessions.iter().any(|s| {
                 s.session_type == SessionType::Stark && s.status == DbSessionStatus::Completed
             });
-            let has_snark_session =
-                updated_sessions.iter().any(|s| s.session_type == SessionType::Snark);
+            let has_snark_session = updated_sessions.iter().any(|s| {
+                s.session_type == SessionType::Snark
+                    && matches!(
+                        s.status,
+                        DbSessionStatus::Submitting
+                            | DbSessionStatus::Running
+                            | DbSessionStatus::Completed
+                    )
+            });
 
             if has_stark_completed && !has_snark_session {
                 info!(
@@ -312,14 +319,6 @@ impl NetworkBackend {
                 let proof_bytes =
                     bincode::serde::encode_to_vec(&proof_with_pv, bincode::config::standard())?;
 
-                let update = UpdateProofSession {
-                    backend_session_id: backend_session_id.to_string(),
-                    status: DbSessionStatus::Completed,
-                    error_message: None,
-                    metadata: session.metadata.clone(),
-                };
-                repo.update_proof_session(update).await?;
-
                 let update_receipt = match session.session_type {
                     SessionType::Stark => UpdateReceipt {
                         id: proof_request_id,
@@ -336,7 +335,22 @@ impl NetworkBackend {
                         error_message: None,
                     },
                 };
-                repo.update_receipt_if_running(update_receipt).await?;
+                let updated = repo
+                    .complete_session_and_update_receipt(
+                        backend_session_id,
+                        update_receipt,
+                        session.metadata.clone(),
+                    )
+                    .await?;
+
+                if !updated {
+                    warn!(
+                        proof_request_id = %proof_request_id,
+                        session_id = %backend_session_id,
+                        "Network proof completed but database state was not updated"
+                    );
+                    return Ok(());
+                }
 
                 info!(
                     proof_request_id = %proof_request_id,
@@ -379,17 +393,17 @@ impl NetworkBackend {
             return ProofProcessingResult { status: ProofStatus::Pending, error_message: None };
         }
 
-        for session in sessions {
-            if session.status == DbSessionStatus::Failed {
-                return ProofProcessingResult {
-                    status: ProofStatus::Failed,
-                    error_message: session.error_message.clone(),
-                };
-            }
-        }
-
         match proof_type {
             ProofType::OpSuccinctSp1ClusterCompressed => {
+                for session in sessions {
+                    if session.status == DbSessionStatus::Failed {
+                        return ProofProcessingResult {
+                            status: ProofStatus::Failed,
+                            error_message: session.error_message.clone(),
+                        };
+                    }
+                }
+
                 let all_completed = sessions.iter().all(|s| s.status == DbSessionStatus::Completed);
                 if all_completed {
                     ProofProcessingResult { status: ProofStatus::Succeeded, error_message: None }
@@ -398,6 +412,15 @@ impl NetworkBackend {
                 }
             }
             ProofType::OpSuccinctSp1ClusterSnarkGroth16 => {
+                if let Some(failed_stark) = sessions.iter().find(|s| {
+                    s.session_type == SessionType::Stark && s.status == DbSessionStatus::Failed
+                }) {
+                    return ProofProcessingResult {
+                        status: ProofStatus::Failed,
+                        error_message: failed_stark.error_message.clone(),
+                    };
+                }
+
                 let stark_done = sessions.iter().any(|s| {
                     s.session_type == SessionType::Stark && s.status == DbSessionStatus::Completed
                 });
@@ -528,6 +551,7 @@ mod tests {
             error_message: None,
             metadata: None,
             created_at: now,
+            updated_at: now,
             completed_at: None,
         }
     }

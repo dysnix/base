@@ -212,8 +212,16 @@ impl ProvingBackend for MockBackend {
                     continue;
                 };
 
-                repo.complete_session_and_update_receipt(backend_session_id, update_receipt)
+                let updated = repo
+                    .complete_session_and_update_receipt(backend_session_id, update_receipt, None)
                     .await?;
+
+                if !updated {
+                    anyhow::bail!(
+                        "MockBackend could not complete session {backend_session_id} for request {}",
+                        proof_request.id
+                    );
+                }
 
                 info!(
                     proof_request_id = %proof_request.id,
@@ -232,8 +240,15 @@ impl ProvingBackend for MockBackend {
             let has_stark_completed = updated_sessions.iter().any(|s| {
                 s.session_type == SessionType::Stark && s.status == DbSessionStatus::Completed
             });
-            let has_snark_session =
-                updated_sessions.iter().any(|s| s.session_type == SessionType::Snark);
+            let has_snark_session = updated_sessions.iter().any(|s| {
+                s.session_type == SessionType::Snark
+                    && matches!(
+                        s.status,
+                        DbSessionStatus::Submitting
+                            | DbSessionStatus::Running
+                            | DbSessionStatus::Completed
+                    )
+            });
 
             if has_stark_completed && !has_snark_session {
                 repo.enqueue_snark_outbox_if_needed(proof_request.id).await?;
@@ -261,17 +276,17 @@ fn determine_mock_status(
         return ProofProcessingResult { status: ProofStatus::Pending, error_message: None };
     }
 
-    for session in sessions {
-        if session.status == DbSessionStatus::Failed {
-            return ProofProcessingResult {
-                status: ProofStatus::Failed,
-                error_message: session.error_message.clone(),
-            };
-        }
-    }
-
     match proof_type {
         ProofType::OpSuccinctSp1ClusterCompressed => {
+            for session in sessions {
+                if session.status == DbSessionStatus::Failed {
+                    return ProofProcessingResult {
+                        status: ProofStatus::Failed,
+                        error_message: session.error_message.clone(),
+                    };
+                }
+            }
+
             let all_completed = sessions.iter().all(|s| s.status == DbSessionStatus::Completed);
             ProofProcessingResult {
                 status: if all_completed { ProofStatus::Succeeded } else { ProofStatus::Running },
@@ -279,6 +294,15 @@ fn determine_mock_status(
             }
         }
         ProofType::OpSuccinctSp1ClusterSnarkGroth16 => {
+            if let Some(failed_stark) = sessions.iter().find(|s| {
+                s.session_type == SessionType::Stark && s.status == DbSessionStatus::Failed
+            }) {
+                return ProofProcessingResult {
+                    status: ProofStatus::Failed,
+                    error_message: failed_stark.error_message.clone(),
+                };
+            }
+
             let stark_done = sessions.iter().any(|s| {
                 s.session_type == SessionType::Stark && s.status == DbSessionStatus::Completed
             });

@@ -13,6 +13,7 @@ use crate::{
 };
 
 const SUBMIT_SNARK_TASK: &str = "submit_snark";
+const SUBMIT_STARK_TASK: &str = "submit_stark";
 
 /// Pool that creates `ProverWorker` instances and implements `TaskQueue`.
 ///
@@ -56,13 +57,19 @@ impl ProverWorkerPool {
 impl TaskQueue for ProverWorkerPool {
     async fn submit(&self, task: OutboxTask) -> anyhow::Result<()> {
         let proof_request_id = task.proof_request_id;
-        let task_type = task
-            .params
-            .get("task_type")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("submit_stark");
-        let session_type =
-            if task_type == SUBMIT_SNARK_TASK { SessionType::Snark } else { SessionType::Stark };
+        let task_type = task.params.get("task_type").and_then(serde_json::Value::as_str);
+        let session_type = match session_type_for_task_type(task_type) {
+            Ok(session_type) => session_type,
+            Err(other) => {
+                error!(
+                    proof_request_id = %proof_request_id,
+                    task_type = %other,
+                    "Unknown outbox task type"
+                );
+                metrics::inc_outbox_tasks_processed("failed", "unknown");
+                anyhow::bail!("Unknown outbox task_type: {other}");
+            }
+        };
 
         let Some(claimed) =
             self.repo.create_submitting_stage_for_outbox(proof_request_id, session_type).await?
@@ -142,5 +149,37 @@ impl TaskQueue for ProverWorkerPool {
 
         // Return immediately - task has been successfully submitted to the worker
         Ok(())
+    }
+}
+
+fn session_type_for_task_type(task_type: Option<&str>) -> Result<SessionType, String> {
+    match task_type {
+        Some(task) if task == SUBMIT_SNARK_TASK => Ok(SessionType::Snark),
+        Some(task) if task == SUBMIT_STARK_TASK => Ok(SessionType::Stark),
+        None => Ok(SessionType::Stark),
+        Some(other) => Err(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_task_type_defaults_to_stark() {
+        assert_eq!(session_type_for_task_type(None), Ok(SessionType::Stark));
+    }
+
+    #[test]
+    fn explicit_snark_task_maps_to_snark() {
+        assert_eq!(session_type_for_task_type(Some(SUBMIT_SNARK_TASK)), Ok(SessionType::Snark));
+    }
+
+    #[test]
+    fn unknown_task_type_is_rejected() {
+        assert_eq!(
+            session_type_for_task_type(Some("submit_stork")),
+            Err("submit_stork".to_string())
+        );
     }
 }

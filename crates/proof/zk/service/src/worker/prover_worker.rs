@@ -1,10 +1,12 @@
-use std::{fmt, sync::Arc};
+use std::{fmt, future::Future, sync::Arc, time::Duration};
 
 use base_zk_client::ProveBlockRequest;
 use base_zk_db::{ClaimedProofRequest, ProofRequest, ProofRequestRepo, SessionType};
 use tracing::{debug, error, info, warn};
 
 use crate::{backends::ProvingBackend, metrics};
+
+const SUBMISSION_HEARTBEAT_SECS: u64 = 30;
 
 /// Individual worker that processes a single proving task
 pub struct ProverWorker {
@@ -56,8 +58,30 @@ impl ProverWorker {
         let pt_label = metrics::proof_type_label(proof_request.proof_type);
 
         let result = match self.claimed.session_type {
-            SessionType::Stark => self.backend.prove(&proof_request_to_proto(proof_request)?).await,
-            SessionType::Snark => self.backend.submit_snark(proof_request).await,
+            SessionType::Stark => {
+                let request = match proof_request_to_proto(proof_request) {
+                    Ok(request) => request,
+                    Err(e) => {
+                        let error_msg = format!("Invalid proof request: {e}");
+                        self.fail_submitting_request(proof_request, error_msg.clone()).await?;
+                        return Err(anyhow::anyhow!(error_msg));
+                    }
+                };
+                await_with_heartbeat(
+                    self.repo.clone(),
+                    self.claimed.proof_session_id,
+                    self.backend.prove(&request),
+                )
+                .await
+            }
+            SessionType::Snark => {
+                await_with_heartbeat(
+                    self.repo.clone(),
+                    self.claimed.proof_session_id,
+                    self.backend.submit_snark(proof_request),
+                )
+                .await
+            }
         };
 
         match result {
@@ -94,12 +118,15 @@ impl ProverWorker {
                             );
                         }
                         Ok(false) => {
-                            warn!(
+                            error!(
                                 proof_request_id = %proof_request.id,
                                 backend_session_id = %session_id,
-                                "Could not mark session RUNNING"
+                                "Backend accepted job but session could not be marked RUNNING"
                             );
-                            return Ok(());
+                            return Err(anyhow::anyhow!(
+                                "Backend accepted session {session_id} for request {}, but DB state could not be marked RUNNING",
+                                proof_request.id
+                            ));
                         }
                         Err(e) => {
                             error!(
@@ -116,10 +143,13 @@ impl ProverWorker {
                         }
                     }
                 } else {
-                    info!(
+                    let error_msg = "Backend returned no session ID".to_string();
+                    error!(
                         proof_request_id = %proof_request.id,
-                        "Proof completed without session ID (local proving)"
+                        "Backend submission returned without session ID"
                     );
+                    self.fail_submitting_request(proof_request, error_msg.clone()).await?;
+                    return Err(anyhow::anyhow!(error_msg));
                 }
 
                 Ok(())
@@ -161,6 +191,59 @@ impl ProverWorker {
                 }
 
                 Err(anyhow::anyhow!(error_msg))
+            }
+        }
+    }
+
+    async fn fail_submitting_request(
+        &self,
+        proof_request: &ProofRequest,
+        error_msg: String,
+    ) -> anyhow::Result<()> {
+        let was_failed = self
+            .repo
+            .fail_submitting_session_and_request(
+                self.claimed.proof_session_id,
+                proof_request.id,
+                error_msg,
+            )
+            .await?;
+
+        if !was_failed {
+            warn!(
+                proof_request_id = %proof_request.id,
+                proof_session_id = self.claimed.proof_session_id,
+                "Could not transition submitting stage to FAILED"
+            );
+        }
+
+        Ok(())
+    }
+}
+
+async fn await_with_heartbeat<F, T>(
+    repo: ProofRequestRepo,
+    proof_session_id: i64,
+    future: F,
+) -> anyhow::Result<T>
+where
+    F: Future<Output = anyhow::Result<T>>,
+{
+    tokio::pin!(future);
+    let mut interval = tokio::time::interval(Duration::from_secs(SUBMISSION_HEARTBEAT_SECS));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            _ = interval.tick() => {
+                if let Err(e) = repo.touch_submitting_session(proof_session_id).await {
+                    warn!(
+                        proof_session_id,
+                        error = %e,
+                        "Failed to heartbeat submitting session"
+                    );
+                }
             }
         }
     }
