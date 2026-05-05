@@ -8,7 +8,7 @@
 guest := "base-proof-tee-nitro-verifier-guest"
 
 # Expected risc0 toolchain version. Update these when bumping the toolchain.
-# Must match the version installed in the Dockerfile.
+# Must match RISC0_RUST_VERSION / RISC0_RUST_COMMIT in the Dockerfile.
 expected_risc0_rust := "1.91.1"
 expected_risc0_commit := "30e2186d0"
 

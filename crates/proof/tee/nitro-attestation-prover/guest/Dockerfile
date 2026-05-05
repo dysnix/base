@@ -81,7 +81,7 @@ RUN apt-get update \
 # Allow git to operate on bind-mounted directories whose owner uid does not
 # match the container user. Without this, `git rev-parse --show-toplevel`
 # fails with "dubious ownership" inside the Justfile.
-RUN git config --system --add safe.directory '*'
+RUN git config --system --add safe.directory /build/base
 
 # Pinned tool versions. Bumping any of these may change the resulting ELF.
 # RISC0_RUST_COMMIT is asserted at image build time so a silently-bumped
