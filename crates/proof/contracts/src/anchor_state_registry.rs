@@ -17,6 +17,9 @@ sol! {
         /// Returns the current anchor root and its L2 sequence number.
         function getAnchorRoot() external view returns (bytes32 root, uint256 l2SequenceNumber);
 
+        /// Returns the static starting anchor root set at deployment.
+        function getStartingAnchorRoot() external view returns (bytes32 root, uint256 l2SequenceNumber);
+
         /// Returns the address of the `DisputeGameFactory`.
         function disputeGameFactory() external view returns (address);
 
@@ -94,6 +97,9 @@ impl AnchorPreflight {
 pub trait AnchorStateRegistryClient: Send + Sync {
     /// Returns the current anchor root.
     async fn get_anchor_root(&self) -> Result<AnchorRoot, ContractError>;
+
+    /// Returns the starting anchor root set at deployment.
+    async fn get_starting_anchor_root(&self) -> Result<AnchorRoot, ContractError>;
 }
 
 /// Concrete implementation backed by Alloy's sol-generated contract bindings.
@@ -126,6 +132,24 @@ impl AnchorStateRegistryClient for AnchorStateRegistryContractClient {
             root = ?result.root,
             l2_block_number,
             "Read anchor root from AnchorStateRegistry"
+        );
+
+        Ok(AnchorRoot { root: result.root, l2_block_number })
+    }
+
+    async fn get_starting_anchor_root(&self) -> Result<AnchorRoot, ContractError> {
+        let result = self.contract.getStartingAnchorRoot().call().await.map_err(|e| {
+            ContractError::Call { context: "getStartingAnchorRoot failed".into(), source: e }
+        })?;
+
+        let l2_block_number: u64 = result.l2SequenceNumber.try_into().map_err(|_| {
+            ContractError::Validation("starting anchor l2SequenceNumber overflows u64".into())
+        })?;
+
+        tracing::info!(
+            root = ?result.root,
+            l2_block_number,
+            "Read starting anchor root from AnchorStateRegistry"
         );
 
         Ok(AnchorRoot { root: result.root, l2_block_number })

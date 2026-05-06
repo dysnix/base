@@ -720,7 +720,7 @@ where
             .await
             .map_err(|e| ProposerError::Contract(format!("recovery game_count failed: {e}")))?;
 
-        // Read the anchor root early so it can be included in the cache key.
+        // Read the live anchor root for cache validation.
         let anchor = self
             .anchor_registry
             .get_anchor_root()
@@ -743,17 +743,8 @@ where
             return Ok(cached.state);
         }
 
-        // ── Forward walk ────────────────────────────────────────────────
-        //
-        // When game_count increased and the anchor is still at or behind
-        // the cached tip, resume from the tip instead of re-walking from
-        // the anchor. This turns post-submission recovery from O(K) to
-        // O(1).
-        //
-        // A full walk from the anchor is required when:
-        // - No cache exists (cold start / pipeline reset).
-        // - The anchor advanced past the cached tip (governance / anomaly).
-        // - game_count decreased (L1 reorg removed games).
+        // Forward walk: resume from cached tip when possible, otherwise
+        // start from the starting anchor root (static, matches AggregateVerifier).
         let start = match cache.as_ref() {
             Some(cached) if tip_still_valid(cached) && count > cached.game_count => {
                 debug!(
@@ -764,11 +755,17 @@ where
                 );
                 cached.state
             }
-            _ => RecoveredState {
-                parent_address: self.config.driver.anchor_state_registry_address,
-                output_root: anchor.root,
-                l2_block_number: anchor.l2_block_number,
-            },
+            _ => {
+                let starting_anchor =
+                    self.anchor_registry.get_starting_anchor_root().await.map_err(|e| {
+                        ProposerError::Contract(format!("get_starting_anchor_root failed: {e}"))
+                    })?;
+                RecoveredState {
+                    parent_address: self.config.driver.anchor_state_registry_address,
+                    output_root: starting_anchor.root,
+                    l2_block_number: starting_anchor.l2_block_number,
+                }
+            }
         };
 
         let state = self.forward_walk(&start).await?;
@@ -1428,8 +1425,10 @@ mod tests {
             output_roots: HashMap::new(),
             max_safe_block: None,
         });
-        let anchor_registry =
-            Arc::new(MockAnchorStateRegistry { anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK) });
+        let anchor_registry = Arc::new(MockAnchorStateRegistry {
+            anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK),
+            starting_anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK),
+        });
         let factory = Arc::new(MockDisputeGameFactory::with_games(vec![]));
 
         ProvingPipeline::new(
@@ -1478,8 +1477,10 @@ mod tests {
             output_roots,
             max_safe_block: None,
         });
-        let anchor_registry =
-            Arc::new(MockAnchorStateRegistry { anchor_root: test_anchor_root(anchor_block) });
+        let anchor_registry = Arc::new(MockAnchorStateRegistry {
+            anchor_root: test_anchor_root(anchor_block),
+            starting_anchor_root: test_anchor_root(anchor_block),
+        });
 
         ProvingPipeline::new(
             PipelineConfig {
@@ -1670,8 +1671,10 @@ mod tests {
             output_roots,
             max_safe_block: Some(TEST_BLOCK_INTERVAL * 2),
         });
-        let anchor_registry =
-            Arc::new(MockAnchorStateRegistry { anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK) });
+        let anchor_registry = Arc::new(MockAnchorStateRegistry {
+            anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK),
+            starting_anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK),
+        });
 
         let pipeline = ProvingPipeline::new(
             PipelineConfig {
@@ -1928,8 +1931,10 @@ mod tests {
             output_roots: HashMap::new(),
             max_safe_block: None,
         });
-        let anchor_registry =
-            Arc::new(MockAnchorStateRegistry { anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK) });
+        let anchor_registry = Arc::new(MockAnchorStateRegistry {
+            anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK),
+            starting_anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK),
+        });
         let factory = Arc::new(MockDisputeGameFactory::with_games(vec![]));
 
         let pipeline = ProvingPipeline::new(
@@ -2000,8 +2005,10 @@ mod tests {
             output_roots: HashMap::new(),
             max_safe_block: None,
         });
-        let anchor_registry =
-            Arc::new(MockAnchorStateRegistry { anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK) });
+        let anchor_registry = Arc::new(MockAnchorStateRegistry {
+            anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK),
+            starting_anchor_root: test_anchor_root(TEST_ANCHOR_BLOCK),
+        });
         let factory = Arc::new(MockDisputeGameFactory::with_games(vec![]));
 
         let pipeline = ProvingPipeline::new(
