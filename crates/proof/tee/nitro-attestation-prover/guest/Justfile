@@ -105,6 +105,10 @@ diagnose: check-toolchain
     echo "=== Verifier crate source hashes ==="
     find ../../nitro-verifier/src -type f | sort | xargs shasum -a 256 2>/dev/null || find ../../nitro-verifier/src -type f | sort | xargs sha256sum
     echo ""
+    echo "=== Build config hashes ==="
+    shasum -a 256 Justfile 2>/dev/null || sha256sum Justfile
+    shasum -a 256 Dockerfile 2>/dev/null || sha256sum Dockerfile
+    echo ""
     echo "=== Profile settings ==="
     grep -A5 '\[profile' Cargo.toml || true
 

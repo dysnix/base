@@ -91,6 +91,9 @@ ARG JUST_VERSION=1.36.0
 ARG RISC0_RUST_VERSION=1.91.1
 # Must match `expected_risc0_commit` in the Justfile.
 ARG RISC0_RUST_COMMIT=30e2186d0
+# SHA-256 of rust-toolchain-x86_64-unknown-linux-gnu.tar.gz from the
+# r0.<RISC0_RUST_VERSION> GitHub release. Update when bumping the toolchain.
+ARG RISC0_TOOLCHAIN_SHA256=e082a1dc44abdef1d95460295a70218eb294ab999b834570ec932d05641cce5d
 
 # `just` (drives the build via the existing Justfile recipes).
 RUN curl -fsSL "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
@@ -125,17 +128,19 @@ RUN curl -fsSL https://sh.rustup.rs \
 #       --pattern "rust-toolchain-x86_64-unknown-linux-gnu.tar.gz" \
 #       --dir crates/proof/tee/nitro-attestation-prover/guest
 COPY rust-toolchain-x86_64-unknown-linux-gnu.tar.gz* /tmp/
-RUN TOOLCHAIN_DIR="/root/.risc0/toolchains/v${RISC0_RUST_VERSION}-rust-x86_64-unknown-linux-gnu" \
+RUN TOOLCHAIN_TAR="/tmp/rust-toolchain-x86_64-unknown-linux-gnu.tar.gz" \
+    && TOOLCHAIN_DIR="/root/.risc0/toolchains/v${RISC0_RUST_VERSION}-rust-x86_64-unknown-linux-gnu" \
     && mkdir -p "$TOOLCHAIN_DIR" /root/.risc0/bin \
-    && if [ -f /tmp/rust-toolchain-x86_64-unknown-linux-gnu.tar.gz ]; then \
+    && if [ -f "$TOOLCHAIN_TAR" ]; then \
         echo "Using pre-downloaded toolchain from build context"; \
-        tar -xzf /tmp/rust-toolchain-x86_64-unknown-linux-gnu.tar.gz -C "$TOOLCHAIN_DIR"; \
-        rm /tmp/rust-toolchain-x86_64-unknown-linux-gnu.tar.gz; \
     else \
         echo "Downloading toolchain from GitHub (this may be slow under QEMU)..."; \
-        curl -fsSL "https://github.com/risc0/rust/releases/download/r0.${RISC0_RUST_VERSION}/rust-toolchain-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C "$TOOLCHAIN_DIR"; \
+        curl -fsSL -o "$TOOLCHAIN_TAR" \
+            "https://github.com/risc0/rust/releases/download/r0.${RISC0_RUST_VERSION}/rust-toolchain-x86_64-unknown-linux-gnu.tar.gz"; \
     fi \
+    && echo "${RISC0_TOOLCHAIN_SHA256}  ${TOOLCHAIN_TAR}" | sha256sum -c - \
+    && tar -xzf "$TOOLCHAIN_TAR" -C "$TOOLCHAIN_DIR" \
+    && rm "$TOOLCHAIN_TAR" \
     && rustup toolchain link risc0 "$TOOLCHAIN_DIR" \
     && rustup default risc0 \
     && rustc --version > /tmp/rustc.txt \
