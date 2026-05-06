@@ -3,8 +3,8 @@
 use std::fmt;
 
 use base_zk_client::{
-    GetProofRequest, GetProofResponse, ProveBlockRequest, ProveBlockResponse,
-    prover_service_server::ProverService,
+    GetProofRequest, GetProofResponse, ListProofsRequest, ListProofsResponse, ProveBlockRequest,
+    ProveBlockResponse, prover_service_server::ProverService,
 };
 use base_zk_db::ProofRequestRepo;
 use tonic::{Request, Response, Status};
@@ -12,6 +12,7 @@ use tonic::{Request, Response, Status};
 use crate::proof_request_manager::ProofRequestManager;
 
 mod get_proof;
+mod list_proofs;
 mod prove_block;
 
 /// gRPC server implementing the `ProverService` trait.
@@ -48,5 +49,12 @@ impl ProverService for ProverServiceServer {
         request: Request<GetProofRequest>,
     ) -> std::result::Result<tonic::Response<GetProofResponse>, Status> {
         self.get_proof_impl(request).await
+    }
+
+    async fn list_proofs(
+        &self,
+        request: Request<ListProofsRequest>,
+    ) -> Result<Response<ListProofsResponse>, Status> {
+        self.list_proofs_impl(request).await
     }
 }

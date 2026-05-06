@@ -844,6 +844,45 @@ impl ProofRequestRepo {
         rows.iter().map(row_to_proof_request).collect()
     }
 
+    /// List proof requests with offset-based pagination and return total count.
+    pub async fn list_with_offset(
+        &self,
+        status_filter: Option<ProofStatus>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<ProofRequest>, u64)> {
+        let status_str = status_filter.map(|s| s.as_str().to_string());
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                id, start_block_number, number_of_blocks_to_prove, sequence_window,
+                proof_type, NULL::bytea AS stark_receipt, NULL::bytea AS snark_receipt,
+                status, error_message, prover_address, l1_head,
+                intermediate_root_interval, created_at, updated_at, completed_at, retry_count
+            FROM proof_requests
+            WHERE ($1::text IS NULL OR status = $1)
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(status_str.as_deref())
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM proof_requests WHERE ($1::text IS NULL OR status = $1)",
+        )
+        .bind(status_str.as_deref())
+        .fetch_one(&self.pool)
+        .await?;
+
+        let proofs = rows.iter().map(row_to_proof_request).collect::<Result<Vec<_>>>()?;
+        Ok((proofs, count.0.max(0) as u64))
+    }
+
     // ========== Outbox Methods ==========
 
     /// Create an outbox entry for background task processing.
