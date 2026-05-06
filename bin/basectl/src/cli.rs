@@ -39,4 +39,7 @@ pub(crate) enum Commands {
     /// Network upgrade activation countdown and history
     #[command(visible_alias = "u")]
     Upgrades,
+    /// ZK prover service dashboard
+    #[command(visible_alias = "pv")]
+    Prover,
 }

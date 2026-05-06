@@ -15,7 +15,7 @@ use crate::{
     config::{ConductorNodeConfig, MonitoringConfig},
     rpc::{
         BacklogFetchResult, BlockDaInfo, ConductorNodeStatus, L1BlockInfo, L1ConnectionMode,
-        ProofsSnapshot, TimestampedFlashblock, ValidatorNodeStatus,
+        ProofsSnapshot, ProverSnapshot, TimestampedFlashblock, ValidatorNodeStatus,
     },
     tui::ToastState,
 };
@@ -141,6 +141,29 @@ impl ProofsState {
     }
 }
 
+/// State for ZK prover service monitoring (proof job list).
+#[derive(Debug, Default)]
+pub struct ProverState {
+    /// Most recent prover snapshot from the background poller.
+    pub snapshot: Option<ProverSnapshot>,
+    rx: Option<mpsc::Receiver<ProverSnapshot>>,
+}
+
+impl ProverState {
+    /// Sets the channel for receiving prover snapshots.
+    pub fn set_channel(&mut self, rx: mpsc::Receiver<ProverSnapshot>) {
+        self.rx = Some(rx);
+    }
+
+    /// Drains the latest snapshot from the background poller.
+    pub fn poll(&mut self) {
+        let Some(ref mut rx) = self.rx else { return };
+        while let Ok(snapshot) = rx.try_recv() {
+            self.snapshot = Some(snapshot);
+        }
+    }
+}
+
 /// Handle to a running load test task and its stop signal, used by [`super::App`]
 /// to await drain completion on shutdown so funds are returned to the funder.
 #[derive(Debug)]
@@ -168,6 +191,8 @@ pub struct Resources {
     pub validators: ValidatorState,
     /// Proof system monitoring state.
     pub proofs: ProofsState,
+    /// ZK prover service monitoring state.
+    pub prover: ProverState,
     /// L1 system config fetched from the contract.
     pub system_config: Option<SystemConfig>,
     sys_config_rx: Option<mpsc::Receiver<SystemConfig>>,
@@ -230,6 +255,7 @@ impl Resources {
             conductor: ConductorState::default(),
             validators: ValidatorState::default(),
             proofs: ProofsState::default(),
+            prover: ProverState::default(),
             system_config: None,
             sys_config_rx: None,
             load_test_task: None,

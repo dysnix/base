@@ -15,6 +15,8 @@ pub enum ViewId {
     Conductor,
     /// Proof system monitor (dispute games, anchor state).
     Proofs,
+    /// ZK prover service dashboard (proof jobs list).
+    Prover,
     /// Load test runner and metrics viewer.
     LoadTest,
     /// Network upgrade activation countdown and history.

@@ -88,6 +88,13 @@ const MENU_ITEMS: &[MenuItem] = &[
         badge: None,
         view_id: Some(ViewId::Upgrades),
     },
+    MenuItem {
+        key: 'z',
+        label: "ZK Prover",
+        description: "Monitor ZK prover jobs and proof status",
+        badge: Some("config-required"),
+        view_id: Some(ViewId::Prover),
+    },
     MenuItem { key: 'q', label: "Quit", description: "Exit basectl", badge: None, view_id: None },
 ];
 
@@ -100,6 +107,7 @@ const KEYBINDINGS: &[Keybinding] = &[
     Keybinding { key: "l", description: "Load Test" },
     Keybinding { key: "p", description: "Proofs" },
     Keybinding { key: "u", description: "Upgrades" },
+    Keybinding { key: "z", description: "ZK Prover" },
     Keybinding { key: "j/k", description: "Navigate" },
     Keybinding { key: "←/→", description: "Switch column" },
     Keybinding { key: "Enter", description: "Select" },
@@ -141,6 +149,7 @@ impl View for HomeView {
             KeyCode::Char('l') => Action::SwitchView(ViewId::LoadTest),
             KeyCode::Char('p') => Action::SwitchView(ViewId::Proofs),
             KeyCode::Char('u') => Action::SwitchView(ViewId::Upgrades),
+            KeyCode::Char('z') => Action::SwitchView(ViewId::Prover),
             KeyCode::Up | KeyCode::Char('k') => {
                 self.selected_index = self.selected_index.saturating_sub(1);
                 Action::None

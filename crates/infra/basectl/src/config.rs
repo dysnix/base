@@ -113,6 +113,9 @@ pub struct MonitoringConfig {
     /// Proof system monitoring configuration (dispute games, anchor state).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proofs: Option<ProofsConfig>,
+    /// ZK prover service gRPC endpoint URL (e.g. `http://localhost:9000`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prover_rpc: Option<Url>,
 }
 
 impl MonitoringConfig {
@@ -154,6 +157,7 @@ struct MonitoringConfigOverride {
     conductors: Option<Vec<ConductorNodeConfig>>,
     validators: Option<Vec<ValidatorNodeConfig>>,
     proofs: Option<ProofsConfig>,
+    prover_rpc: Option<Url>,
 }
 
 impl MonitoringConfig {
@@ -197,6 +201,7 @@ impl MonitoringConfig {
             conductors: None,
             validators: None,
             proofs: None,
+            prover_rpc: Some(Url::parse("https://base-zk-prover-service-mainnet.cbhq.net").unwrap()),
         }
     }
 
@@ -216,6 +221,7 @@ impl MonitoringConfig {
             conductors: None,
             validators: None,
             proofs: None,
+            prover_rpc: Some(Url::parse("https://base-zk-prover-service-sepolia.cbhq.net").unwrap()),
         }
     }
 
@@ -284,6 +290,7 @@ impl MonitoringConfig {
                 docker_cl: Some("base-client-cl".to_string()),
             }]),
             proofs: None,
+            prover_rpc: Some(Url::parse("https://base-zk-prover-service-dev.cbhq.net").unwrap()),
         }
     }
 
@@ -398,6 +405,7 @@ impl MonitoringConfig {
             conductors: overrides.conductors.or(base.conductors),
             validators: overrides.validators.or(base.validators),
             proofs: overrides.proofs.or(base.proofs),
+            prover_rpc: overrides.prover_rpc.or(base.prover_rpc),
         })
     }
 

@@ -1446,6 +1446,69 @@ async fn find_latest_proposal<P: Provider + Clone>(
     None
 }
 
+/// Snapshot of the ZK prover service state fetched via gRPC `ListProofs`.
+#[derive(Debug, Clone)]
+pub struct ProverSnapshot {
+    /// Proof summaries returned by the prover service.
+    pub proofs: Vec<base_zk_client::ProofSummary>,
+    /// Total proofs matching the current filter.
+    pub total_count: u64,
+}
+
+/// Polls the ZK prover service via gRPC `ListProofs` at regular intervals.
+pub async fn run_prover_poller(
+    prover_rpc: String,
+    tx: mpsc::Sender<ProverSnapshot>,
+    toast_tx: mpsc::Sender<Toast>,
+) {
+    use base_zk_client::{ListProofsRequest, prover_service_client::ProverServiceClient};
+    use tonic::transport::Endpoint;
+
+    let channel = match Endpoint::from_shared(prover_rpc.clone()) {
+        Ok(ep) => ep.connect_timeout(Duration::from_secs(5)).connect_lazy(),
+        Err(e) => {
+            warn!(error = %e, "invalid prover gRPC endpoint");
+            let _ = toast_tx
+                .send(Toast::warning(format!("Prover: invalid endpoint: {e}")))
+                .await;
+            return;
+        }
+    };
+
+    let mut client = ProverServiceClient::new(channel);
+    let mut interval = tokio::time::interval(Duration::from_secs(3));
+    let mut notified_failure = false;
+
+    loop {
+        interval.tick().await;
+
+        let request = ListProofsRequest { offset: 0, limit: 50, status_filter: None };
+
+        match client.list_proofs(request).await {
+            Ok(response) => {
+                notified_failure = false;
+                let resp = response.into_inner();
+                let snapshot =
+                    ProverSnapshot { proofs: resp.proofs, total_count: resp.total_count };
+                if tx.send(snapshot).await.is_err() {
+                    return;
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, endpoint = %prover_rpc, "prover ListProofs call failed");
+                if !notified_failure {
+                    notified_failure = true;
+                    let _ = toast_tx
+                        .send(Toast::warning(format!(
+                            "Prover: cannot reach {prover_rpc} — {e}"
+                        )))
+                        .await;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::effective_priority_fee_per_gas;

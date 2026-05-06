@@ -26,6 +26,7 @@ async fn main() -> anyhow::Result<()> {
         Some(cli::Commands::CommandCenter) => run_app(ViewId::CommandCenter, config).await,
         Some(cli::Commands::Conductor) => run_app(ViewId::Conductor, config).await,
         Some(cli::Commands::Upgrades) => run_app(ViewId::Upgrades, config).await,
+        Some(cli::Commands::Prover) => run_app(ViewId::Prover, config).await,
         None => run_app(ViewId::Home, config).await,
     }
 }

@@ -27,6 +27,9 @@ pub use load_test::LoadTestView;
 mod proofs;
 pub use proofs::ProofsView;
 
+mod prover;
+pub use prover::ProverView;
+
 mod transaction_pane;
 pub use transaction_pane::TransactionPane;
 

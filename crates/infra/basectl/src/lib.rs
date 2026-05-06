@@ -4,8 +4,9 @@ mod app;
 pub use app::{
     Action, App, CommandCenterView, ConductorState, ConductorView, ConfigView, DaMonitorView,
     DaState, FlashState, FlashblocksView, HomeView, LoadTestTask, LoadTestView, ProofsState,
-    ProofsView, Resources, Router, TransactionPane, UpgradesView, ValidatorState, View, ViewId,
-    create_view, run_app, run_flashblocks_json, start_background_services,
+    ProofsView, ProverState, ProverView, Resources, Router, TransactionPane, UpgradesView,
+    ValidatorState, View, ViewId, create_view, run_app, run_flashblocks_json,
+    start_background_services,
 };
 
 mod commands;
@@ -30,11 +31,13 @@ mod rpc;
 pub use rpc::{
     BacklogBlock, BacklogFetchResult, BacklogProgress, BlockDaInfo, ConductorNodeStatus,
     InitialBacklog, L1BlockInfo, L1ConnectionMode, LatestProposal, PausedPeers, ProofsSnapshot,
-    TimestampedFlashblock, TxSummary, ValidatorNodeStatus, decode_flashblock_transactions,
-    fetch_block_transactions, fetch_initial_backlog_with_progress, fetch_safe_and_latest,
-    pause_sequencer_node, restart_conductor_node, run_block_fetcher, run_conductor_poller,
-    run_flashblock_ws, run_flashblock_ws_timestamped, run_l1_blob_watcher, run_proofs_poller,
-    run_safe_head_poller, run_validator_poller, transfer_conductor_leader, unpause_sequencer_node,
+    ProverSnapshot, TimestampedFlashblock, TxSummary, ValidatorNodeStatus,
+    decode_flashblock_transactions, fetch_block_transactions,
+    fetch_initial_backlog_with_progress, fetch_safe_and_latest, pause_sequencer_node,
+    restart_conductor_node, run_block_fetcher, run_conductor_poller, run_flashblock_ws,
+    run_flashblock_ws_timestamped, run_l1_blob_watcher, run_proofs_poller, run_prover_poller,
+    run_safe_head_poller, run_validator_poller, transfer_conductor_leader,
+    unpause_sequencer_node,
 };
 
 mod tui;

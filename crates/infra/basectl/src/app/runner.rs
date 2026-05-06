@@ -11,10 +11,10 @@ use crate::{
     l1_client::fetch_full_system_config,
     rpc::{
         BacklogFetchResult, BlockDaInfo, ConductorNodeStatus, L1BlockInfo, L1ConnectionMode,
-        ProofsSnapshot, TimestampedFlashblock, ValidatorNodeStatus,
+        ProofsSnapshot, ProverSnapshot, TimestampedFlashblock, ValidatorNodeStatus,
         fetch_initial_backlog_with_progress, run_block_fetcher, run_conductor_poller,
         run_flashblock_ws, run_flashblock_ws_timestamped, run_l1_blob_watcher, run_proofs_poller,
-        run_safe_head_poller, run_validator_poller,
+        run_prover_poller, run_safe_head_poller, run_validator_poller,
     },
     tui::Toast,
 };
@@ -93,6 +93,7 @@ pub fn start_background_services(config: &MonitoringConfig, resources: &mut Reso
     tokio::spawn(fetch_initial_backlog_with_progress(config.rpc.to_string(), backlog_tx));
 
     let proofs_toast_tx = toast_tx.clone();
+    let prover_toast_tx = toast_tx.clone();
     tokio::spawn(run_safe_head_poller(config.rpc.to_string(), sync_tx, toast_tx));
 
     let (sys_config_tx, sys_config_rx) = mpsc::channel::<SystemConfig>(1);
@@ -134,6 +135,16 @@ pub fn start_background_services(config: &MonitoringConfig, resources: &mut Reso
             config.rpc.clone(),
             proofs_tx,
             proofs_toast_tx,
+        ));
+    }
+
+    if let Some(ref prover_rpc) = config.prover_rpc {
+        let (prover_tx, prover_rx) = mpsc::channel::<ProverSnapshot>(4);
+        resources.prover.set_channel(prover_rx);
+        tokio::spawn(run_prover_poller(
+            prover_rpc.to_string(),
+            prover_tx,
+            prover_toast_tx,
         ));
     }
 }
