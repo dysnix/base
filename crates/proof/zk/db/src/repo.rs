@@ -851,35 +851,61 @@ impl ProofRequestRepo {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<ProofRequest>, u64)> {
-        let status_str = status_filter.map(|s| s.as_str().to_string());
+        let (rows, count) = if let Some(status) = status_filter {
+            let rows = sqlx::query(
+                r#"
+                SELECT
+                    id, start_block_number, number_of_blocks_to_prove,
+                    sequence_window, proof_type,
+                    status, error_message,
+                    prover_address, l1_head, intermediate_root_interval,
+                    created_at, updated_at, completed_at, retry_count
+                FROM proof_requests
+                WHERE status = $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(status.as_str())
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
 
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                id, start_block_number, number_of_blocks_to_prove, sequence_window,
-                proof_type, NULL::bytea AS stark_receipt, NULL::bytea AS snark_receipt,
-                status, error_message, prover_address, l1_head,
-                intermediate_root_interval, created_at, updated_at, completed_at, retry_count
-            FROM proof_requests
-            WHERE ($1::text IS NULL OR status = $1)
-            ORDER BY created_at DESC
-            LIMIT $2 OFFSET $3
-            "#,
-        )
-        .bind(status_str.as_deref())
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+            let count: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM proof_requests WHERE status = $1")
+                    .bind(status.as_str())
+                    .fetch_one(&self.pool)
+                    .await?;
 
-        let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM proof_requests WHERE ($1::text IS NULL OR status = $1)",
-        )
-        .bind(status_str.as_deref())
-        .fetch_one(&self.pool)
-        .await?;
+            (rows, count)
+        } else {
+            let rows = sqlx::query(
+                r#"
+                SELECT
+                    id, start_block_number, number_of_blocks_to_prove,
+                    sequence_window, proof_type,
+                    status, error_message,
+                    prover_address, l1_head, intermediate_root_interval,
+                    created_at, updated_at, completed_at, retry_count
+                FROM proof_requests
+                ORDER BY created_at DESC
+                LIMIT $1 OFFSET $2
+                "#,
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
 
-        let proofs = rows.iter().map(row_to_proof_request).collect::<Result<Vec<_>>>()?;
+            let count: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM proof_requests").fetch_one(&self.pool).await?;
+
+            (rows, count)
+        };
+
+        let proofs =
+            rows.iter().map(row_to_proof_request_without_receipts).collect::<Result<Vec<_>>>()?;
         Ok((proofs, count.0.max(0) as u64))
     }
 
@@ -1006,6 +1032,37 @@ fn row_to_proof_request(row: &sqlx::postgres::PgRow) -> Result<ProofRequest> {
         proof_type,
         stark_receipt: row.get("stark_receipt"),
         snark_receipt: row.get("snark_receipt"),
+        status,
+        error_message: row.get("error_message"),
+        prover_address: row.get("prover_address"),
+        l1_head: row.get("l1_head"),
+        intermediate_root_interval: row.get("intermediate_root_interval"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        completed_at: row.get("completed_at"),
+        retry_count: row.get("retry_count"),
+    })
+}
+
+/// Helper function to convert a database row to `ProofRequest` without loading receipt blobs.
+fn row_to_proof_request_without_receipts(row: &sqlx::postgres::PgRow) -> Result<ProofRequest> {
+    let status_str: &str = row.get("status");
+    let status = ProofStatus::try_from(status_str)
+        .map_err(|e| sqlx::Error::Protocol(format!("Unknown proof status '{status_str}': {e}")))?;
+
+    let proof_type_str: &str = row.get("proof_type");
+    let proof_type = ProofType::try_from(proof_type_str).map_err(|e| {
+        sqlx::Error::Protocol(format!("Unknown proof_type '{proof_type_str}': {e}"))
+    })?;
+
+    Ok(ProofRequest {
+        id: row.get("id"),
+        start_block_number: row.get("start_block_number"),
+        number_of_blocks_to_prove: row.get("number_of_blocks_to_prove"),
+        sequence_window: row.get("sequence_window"),
+        proof_type,
+        stark_receipt: None,
+        snark_receipt: None,
         status,
         error_message: row.get("error_message"),
         prover_address: row.get("prover_address"),

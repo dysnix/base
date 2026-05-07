@@ -1,9 +1,10 @@
 //! Implementation of the `ListProofs` gRPC endpoint.
 
 use base_zk_client::{
-    ListProofsRequest, ListProofsResponse, ProofJobStatus, ProofSummary, get_proof_response,
+    ListProofsRequest, ListProofsResponse, ProofJobStatus, ProofSummary,
+    ProofType as ProtoProofType, get_proof_response,
 };
-use base_zk_db::ProofStatus;
+use base_zk_db::{ProofStatus, ProofType as DbProofType};
 use tonic::{Request, Response, Status};
 use tracing::debug;
 
@@ -38,33 +39,9 @@ impl ProverServiceServer {
     ) -> Result<Response<ListProofsResponse>, Status> {
         let req = request.into_inner();
 
-        let limit = match req.limit {
-            0 => DEFAULT_LIMIT,
-            n if n > MAX_LIMIT => MAX_LIMIT,
-            n => n,
-        };
-
-        let offset = req.offset;
-        if offset > i64::MAX as u64 {
-            return Err(Status::invalid_argument("offset exceeds maximum supported value"));
-        }
-
-        let status_filter = match req.status_filter {
-            None => None,
-            Some(v) => {
-                let proto_status = get_proof_response::Status::try_from(v).map_err(|_| {
-                    Status::invalid_argument(format!("invalid status_filter value: {v}"))
-                })?;
-                match proto_status {
-                    get_proof_response::Status::Unspecified => None,
-                    get_proof_response::Status::Created => Some(ProofStatus::Created),
-                    get_proof_response::Status::Pending => Some(ProofStatus::Pending),
-                    get_proof_response::Status::Running => Some(ProofStatus::Running),
-                    get_proof_response::Status::Succeeded => Some(ProofStatus::Succeeded),
-                    get_proof_response::Status::Failed => Some(ProofStatus::Failed),
-                }
-            }
-        };
+        let limit = clamp_limit(req.limit);
+        let offset = validate_offset(req.offset)?;
+        let status_filter = parse_status_filter(req.status_filter)?;
 
         debug!(
             limit = limit,
@@ -75,7 +52,7 @@ impl ProverServiceServer {
 
         let (proofs, total_count) = self
             .repo
-            .list_with_offset(status_filter, limit as i64, offset as i64)
+            .list_with_offset(status_filter, limit as i64, offset)
             .await
             .map_err(|e| Status::internal(format!("database error: {e}")))?;
 
@@ -85,7 +62,7 @@ impl ProverServiceServer {
                 id: p.id.to_string(),
                 start_block_number: p.start_block_number.max(0) as u64,
                 number_of_blocks_to_prove: p.number_of_blocks_to_prove.max(0) as u64,
-                proof_type: p.proof_type.proto_i32(),
+                proof_type: proto_proof_type(p.proof_type).into(),
                 status: proto_status(p.status).into(),
                 created_at: p.created_at.to_rfc3339(),
                 updated_at: p.updated_at.to_rfc3339(),
@@ -95,6 +72,48 @@ impl ProverServiceServer {
             .collect();
 
         Ok(Response::new(ListProofsResponse { proofs: summaries, total_count }))
+    }
+}
+
+const fn clamp_limit(limit: u64) -> u64 {
+    match limit {
+        0 => DEFAULT_LIMIT,
+        n if n > MAX_LIMIT => MAX_LIMIT,
+        n => n,
+    }
+}
+
+fn validate_offset(offset: u64) -> Result<i64, Status> {
+    if offset > i64::MAX as u64 {
+        return Err(Status::invalid_argument("offset exceeds maximum supported value"));
+    }
+
+    Ok(offset as i64)
+}
+
+fn parse_status_filter(status_filter: Option<i32>) -> Result<Option<ProofStatus>, Status> {
+    match status_filter {
+        None => Ok(None),
+        Some(v) => {
+            let proto_status = get_proof_response::Status::try_from(v).map_err(|_| {
+                Status::invalid_argument(format!("invalid status_filter value: {v}"))
+            })?;
+            Ok(match proto_status {
+                get_proof_response::Status::Unspecified => None,
+                get_proof_response::Status::Created => Some(ProofStatus::Created),
+                get_proof_response::Status::Pending => Some(ProofStatus::Pending),
+                get_proof_response::Status::Running => Some(ProofStatus::Running),
+                get_proof_response::Status::Succeeded => Some(ProofStatus::Succeeded),
+                get_proof_response::Status::Failed => Some(ProofStatus::Failed),
+            })
+        }
+    }
+}
+
+const fn proto_proof_type(proof_type: DbProofType) -> ProtoProofType {
+    match proof_type {
+        DbProofType::OpSuccinctSp1ClusterCompressed => ProtoProofType::Compressed,
+        DbProofType::OpSuccinctSp1ClusterSnarkGroth16 => ProtoProofType::SnarkGroth16,
     }
 }
 
@@ -122,32 +141,52 @@ mod tests {
     }
 
     #[test]
-    fn limit_clamping_zero_uses_default() {
-        let limit = match 0u64 {
-            0 => DEFAULT_LIMIT,
-            n if n > MAX_LIMIT => MAX_LIMIT,
-            n => n,
-        };
-        assert_eq!(limit, 50);
+    fn proto_proof_type_maps_all_variants() {
+        assert_eq!(
+            proto_proof_type(DbProofType::OpSuccinctSp1ClusterCompressed),
+            ProtoProofType::Compressed
+        );
+        assert_eq!(
+            proto_proof_type(DbProofType::OpSuccinctSp1ClusterSnarkGroth16),
+            ProtoProofType::SnarkGroth16
+        );
     }
 
     #[test]
-    fn limit_clamping_exceeds_max_caps_at_100() {
-        let limit = match 500u64 {
-            0 => DEFAULT_LIMIT,
-            n if n > MAX_LIMIT => MAX_LIMIT,
-            n => n,
-        };
-        assert_eq!(limit, MAX_LIMIT);
+    fn clamp_limit_handles_default_max_and_passthrough() {
+        assert_eq!(clamp_limit(0), DEFAULT_LIMIT);
+        assert_eq!(clamp_limit(500), MAX_LIMIT);
+        assert_eq!(clamp_limit(25), 25);
     }
 
     #[test]
-    fn limit_clamping_valid_value_passthrough() {
-        let limit = match 25u64 {
-            0 => DEFAULT_LIMIT,
-            n if n > MAX_LIMIT => MAX_LIMIT,
-            n => n,
-        };
-        assert_eq!(limit, 25);
+    fn validate_offset_rejects_overflow() {
+        let err = validate_offset(i64::MAX as u64 + 1).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn status_filter_maps_unset_unspecified_and_valid_values() {
+        assert_eq!(parse_status_filter(None).unwrap(), None);
+        assert_eq!(
+            parse_status_filter(Some(get_proof_response::Status::Unspecified as i32)).unwrap(),
+            None
+        );
+
+        for (proto, expected) in [
+            (get_proof_response::Status::Created, ProofStatus::Created),
+            (get_proof_response::Status::Pending, ProofStatus::Pending),
+            (get_proof_response::Status::Running, ProofStatus::Running),
+            (get_proof_response::Status::Succeeded, ProofStatus::Succeeded),
+            (get_proof_response::Status::Failed, ProofStatus::Failed),
+        ] {
+            assert_eq!(parse_status_filter(Some(proto as i32)).unwrap(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn status_filter_rejects_invalid_value() {
+        let err = parse_status_filter(Some(999)).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 }
