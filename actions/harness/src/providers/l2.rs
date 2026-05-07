@@ -42,7 +42,7 @@ pub struct ActionL2ChainProvider {
     /// L2 blocks by block number.
     blocks: HashMap<u64, L2BlockInfo>,
     /// Op blocks (headers + txs) by block number, needed for batch validation.
-    op_blocks: HashMap<u64, BaseBlock>,
+    base_blocks: HashMap<u64, BaseBlock>,
     /// System configs by L2 block number.
     system_configs: HashMap<u64, SystemConfig>,
 }
@@ -91,8 +91,8 @@ impl ActionL2ChainProvider {
     }
 
     /// Insert a known L2 block with transactions into the provider.
-    pub fn insert_op_block(&mut self, number: u64, block: BaseBlock) {
-        self.op_blocks.insert(number, block);
+    pub fn insert_base_block(&mut self, number: u64, block: BaseBlock) {
+        self.base_blocks.insert(number, block);
     }
 
     /// Insert a system config for the given L2 block number.
@@ -113,7 +113,7 @@ impl BatchValidationProvider for ActionL2ChainProvider {
     }
 
     async fn block_by_number(&mut self, number: u64) -> Result<BaseBlock, L2ProviderError> {
-        self.op_blocks.get(&number).cloned().ok_or(L2ProviderError::BlockNotFound(number))
+        self.base_blocks.get(&number).cloned().ok_or(L2ProviderError::BlockNotFound(number))
     }
 }
 

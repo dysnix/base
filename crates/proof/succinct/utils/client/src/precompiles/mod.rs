@@ -18,7 +18,7 @@ mod custom;
 pub use custom::CustomCrypto;
 
 mod factory;
-pub use factory::ZkvmOpEvmFactory;
+pub use factory::ZkvmBaseEvmFactory;
 
 /// Tracker names for accelerated precompiles.
 /// These names are used in cycle-tracker-report events and must match
@@ -83,14 +83,14 @@ const fn get_precompile_tracker_name(id: &PrecompileId) -> Option<&'static str> 
 
 /// The ZKVM-cycle-tracking precompiles.
 #[derive(Debug)]
-pub struct OpZkvmPrecompiles {
+pub struct BaseZkvmPrecompiles {
     /// The default [`EthPrecompiles`] provider.
     inner: EthPrecompiles,
     /// The [`BaseSpecId`] of the precompiles.
     spec: BaseSpecId,
 }
 
-impl OpZkvmPrecompiles {
+impl BaseZkvmPrecompiles {
     /// Create a new precompile provider with the given [`BaseSpecId`].
     #[inline]
     pub fn new_with_spec(spec: BaseSpecId) -> Self {
@@ -99,7 +99,7 @@ impl OpZkvmPrecompiles {
     }
 }
 
-impl<CTX> PrecompileProvider<CTX> for OpZkvmPrecompiles
+impl<CTX> PrecompileProvider<CTX> for BaseZkvmPrecompiles
 where
     CTX: ContextTr<Cfg: Cfg<Spec = BaseSpecId>>,
 {
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn test_precompile_lookup_uses_bytecode_address() {
         let mut ctx = create_test_context();
-        let mut precompiles = OpZkvmPrecompiles::new_with_spec(BaseSpecId::BEDROCK);
+        let mut precompiles = BaseZkvmPrecompiles::new_with_spec(BaseSpecId::BEDROCK);
 
         // SHA256 precompile at address 0x02
         let sha256_addr = revm::precompile::u64_to_address(2);
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn test_run_nonexistent_precompile() {
         let mut ctx = create_test_context();
-        let mut precompiles = OpZkvmPrecompiles::new_with_spec(BaseSpecId::BEDROCK);
+        let mut precompiles = BaseZkvmPrecompiles::new_with_spec(BaseSpecId::BEDROCK);
 
         let fake_addr = Address::from_slice(&[0xFFu8; 20]);
         let call_inputs = create_call_inputs(fake_addr, Bytes::new(), u64::MAX);
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn test_run_out_of_gas() {
         let mut ctx = create_test_context();
-        let mut precompiles = OpZkvmPrecompiles::new_with_spec(BaseSpecId::BEDROCK);
+        let mut precompiles = BaseZkvmPrecompiles::new_with_spec(BaseSpecId::BEDROCK);
 
         let sha256_addr = revm::precompile::u64_to_address(2);
         let call_inputs = create_call_inputs(sha256_addr, Bytes::from_static(b"test"), 0);
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn test_run_with_shared_buffer_empty() {
         let mut ctx = create_test_context();
-        let mut precompiles = OpZkvmPrecompiles::new_with_spec(BaseSpecId::BEDROCK);
+        let mut precompiles = BaseZkvmPrecompiles::new_with_spec(BaseSpecId::BEDROCK);
 
         let sha256_addr = revm::precompile::u64_to_address(2);
         let call_inputs = CallInputs {
@@ -391,7 +391,7 @@ mod tests {
     fn test_zkvm_precompiles_match_base_evm_precompiles() {
         for spec in ALL_BASE_SPECS {
             let base_precompiles = BasePrecompiles::new_with_spec(spec);
-            let zkvm_precompiles = OpZkvmPrecompiles::new_with_spec(spec);
+            let zkvm_precompiles = BaseZkvmPrecompiles::new_with_spec(spec);
 
             let base_addresses: Vec<_> =
                 <BasePrecompiles as PrecompileProvider<TestContext>>::warm_addresses(
@@ -399,7 +399,7 @@ mod tests {
                 )
                 .collect();
             let zkvm_addresses: Vec<_> =
-                <OpZkvmPrecompiles as PrecompileProvider<TestContext>>::warm_addresses(
+                <BaseZkvmPrecompiles as PrecompileProvider<TestContext>>::warm_addresses(
                     &zkvm_precompiles,
                 )
                 .collect();
@@ -412,7 +412,7 @@ mod tests {
 
             for address in &base_addresses {
                 assert!(
-                    <OpZkvmPrecompiles as PrecompileProvider<TestContext>>::contains(
+                    <BaseZkvmPrecompiles as PrecompileProvider<TestContext>>::contains(
                         &zkvm_precompiles,
                         address,
                     ),

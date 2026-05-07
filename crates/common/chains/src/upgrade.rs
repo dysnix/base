@@ -27,7 +27,7 @@ hardfork!(
         /// Isthmus: <https://github.com/ethereum-optimism/specs/blob/main/specs/protocol/isthmus/overview.md>
         #[default]
         Isthmus,
-        /// Jovian: <https://github.com/ethereum-optimism/specs/tree/main/specs/protocol/jovian>
+        /// Jovian: Base network upgrade.
         Jovian,
         /// Azul: First Base-specific network upgrade.
         Azul,
