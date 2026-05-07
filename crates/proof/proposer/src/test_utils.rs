@@ -10,8 +10,8 @@ use alloy_rpc_types_eth::EIP1186AccountProofResponse;
 use async_trait::async_trait;
 use base_common_genesis::RollupConfig;
 use base_proof_contracts::{
-    AggregateVerifierClient, AnchorPreflight, AnchorRoot, AnchorStateRegistryClient, ContractError,
-    DisputeGameFactoryClient, GameAtIndex, GameInfo,
+    AggregateVerifierClient, AnchorPreflight, AnchorRoot, AnchorSnapshot,
+    AnchorStateRegistryClient, ContractError, DisputeGameFactoryClient, GameAtIndex, GameInfo,
 };
 use base_proof_primitives::{ProofResult, Proposal, ProverClient};
 use base_proof_rpc::{
@@ -135,12 +135,22 @@ impl RollupProvider for MockRollupClient {
 pub struct MockAnchorStateRegistry {
     /// The anchor root returned by `get_anchor_root()`.
     pub anchor_root: AnchorRoot,
+    /// The anchor game returned by `anchor_game()`.
+    pub anchor_game: Address,
 }
 
 #[async_trait]
 impl AnchorStateRegistryClient for MockAnchorStateRegistry {
     async fn get_anchor_root(&self) -> Result<AnchorRoot, ContractError> {
         Ok(self.anchor_root)
+    }
+
+    async fn anchor_game(&self) -> Result<Address, ContractError> {
+        Ok(self.anchor_game)
+    }
+
+    async fn anchor_snapshot(&self) -> Result<AnchorSnapshot, ContractError> {
+        Ok(AnchorSnapshot { anchor_root: self.anchor_root, anchor_game: self.anchor_game })
     }
 }
 
