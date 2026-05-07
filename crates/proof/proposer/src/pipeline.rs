@@ -678,17 +678,21 @@ where
         Some((state, safe_head))
     }
 
-    /// Recovers the latest on-chain state using a deterministic forward walk
-    /// from the anchor root.
+    /// Recovers the latest on-chain state using a deterministic forward walk.
+    ///
+    /// Two anchors are involved: the **live anchor** (`get_anchor_root()`)
+    /// advances when games resolve and is used only for cache validation; the
+    /// **starting anchor** (`get_starting_anchor_root()`) is static and serves
+    /// as the origin for full walks.
     ///
     /// # Strategy
     ///
-    /// 1. Read `game_count` from the factory and anchor root from the registry
-    ///    (2 RPC calls per tick — always needed for cache validation).
-    /// 2. **Cache check — fast path.** If both `game_count` and `anchor_root`
-    ///    match the cache, return the cached state immediately (zero RPCs).
-    /// 3. **Forward walk.** Walk from the anchor block, stepping by
-    ///    `block_interval`. At each step:
+    /// 1. Read `game_count` and the live anchor root (2 RPCs per tick).
+    /// 2. **Fast path.** If `game_count` is unchanged and the live anchor has
+    ///    not advanced past the cached tip, return cached state (zero RPCs).
+    /// 3. **Forward walk.** Start from the starting anchor (full walk) or the
+    ///    cached tip (incremental walk), stepping by `block_interval`. At each
+    ///    step:
     ///    - Compute expected block number deterministically.
     ///    - Fetch the canonical output root and intermediate roots from the
     ///      rollup node.
@@ -1873,6 +1877,64 @@ mod tests {
         // Anchor past cached tip → full walk from new anchor.
         assert_eq!(state.parent_address, proxy_addr(0));
         assert_eq!(state.l2_block_number, anchor_block + TEST_BLOCK_INTERVAL);
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn test_recovery_walks_from_starting_anchor_not_live_anchor() {
+        let starting_block = TEST_ANCHOR_BLOCK;
+        let live_anchor_block = TEST_BLOCK_INTERVAL;
+
+        let (factory, output_roots) =
+            game_chain_full(2, starting_block, TEST_BLOCK_INTERVAL, TEST_BLOCK_INTERVAL);
+
+        let cancel = CancellationToken::new();
+        let l1 = Arc::new(MockL1 { latest_block_number: TEST_L1_BLOCK_NUMBER });
+        let l2 = Arc::new(MockL2 { block_not_found: true, canonical_hash: None });
+        let prover: Arc<dyn ProverClient> =
+            Arc::new(MockProver { delay: MOCK_PROVER_DELAY, block_interval: TEST_BLOCK_INTERVAL });
+        let rollup = Arc::new(MockRollupClient {
+            sync_status: test_sync_status(0, B256::ZERO),
+            output_roots,
+            max_safe_block: None,
+        });
+        let anchor_registry = Arc::new(MockAnchorStateRegistry {
+            anchor_root: test_anchor_root(live_anchor_block),
+            starting_anchor_root: test_anchor_root(starting_block),
+        });
+
+        let pipeline = ProvingPipeline::new(
+            PipelineConfig {
+                max_parallel_proofs: 1,
+                max_retries: 1,
+                recovery_scan_concurrency: 8,
+                tee_prover_registry_address: None,
+                driver: DriverConfig {
+                    game_type: TEST_GAME_TYPE,
+                    block_interval: TEST_BLOCK_INTERVAL,
+                    intermediate_block_interval: TEST_BLOCK_INTERVAL,
+                    ..Default::default()
+                },
+            },
+            prover,
+            l1,
+            l2,
+            rollup,
+            anchor_registry,
+            Arc::new(factory),
+            Arc::new(MockAggregateVerifier::default()),
+            Arc::new(MockOutputProposer),
+            cancel,
+        );
+
+        let mut cache: Option<CachedRecovery> = None;
+        let state = pipeline.recover_latest_state(&mut cache).await.unwrap();
+
+        assert_eq!(
+            state.l2_block_number,
+            TEST_BLOCK_INTERVAL * 2,
+            "walk should traverse both games from starting anchor (block 0), not live anchor"
+        );
+        assert_eq!(state.parent_address, proxy_addr(1));
     }
 
     // ---- Recovery: intermediate roots with multiple checkpoints ----
