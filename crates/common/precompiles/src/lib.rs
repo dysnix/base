@@ -5,6 +5,9 @@
 mod address;
 pub use address::{B20_PREFIX_BYTES, BaseBAddressExt, is_b20_prefix};
 
+mod bootstrap;
+pub use bootstrap::{B20Bootstrap, BUSD_ADDRESS};
+
 pub mod error;
 pub use error::{IntoPrecompileResult, Result};
 
@@ -22,6 +25,7 @@ use alloy::{
     sol_types::{SolCall, SolError},
 };
 use alloy_evm::precompiles::{DynPrecompile, PrecompilesMap};
+pub use base_precompiles_contracts::{B20_FACTORY_ADDRESS, B403_REGISTRY_ADDRESS};
 use revm::{
     context::CfgEnv,
     context_interface::cfg::GasParams,
@@ -33,16 +37,16 @@ use crate::{
     b20::B20Token, b20_factory::B20Factory, b403_registry::B403Registry, storage::StorageCtx,
 };
 
-pub use base_precompiles_contracts::{B20_FACTORY_ADDRESS, B403_REGISTRY_ADDRESS};
-
 /// B precompile activation marker.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub enum BaseBSpec {
     /// B precompiles are not active yet.
     #[default]
     PreAzul,
-    /// B precompiles are active under the Base Azul hardfork.
+    /// Base Azul execution rules are active.
     Azul,
+    /// Native ERC-20 precompiles are active under the Beryl hardfork.
+    Beryl,
 }
 
 impl BaseBSpec {
@@ -56,7 +60,7 @@ impl From<BaseBSpec> for SpecId {
     fn from(spec: BaseBSpec) -> Self {
         match spec {
             BaseBSpec::PreAzul => Self::PRAGUE,
-            BaseBSpec::Azul => Self::OSAKA,
+            BaseBSpec::Azul | BaseBSpec::Beryl => Self::OSAKA,
         }
     }
 }
@@ -110,7 +114,7 @@ pub fn extend_base_b_precompiles(
     gas_params: GasParams,
 ) {
     precompiles.set_precompile_lookup(move |address: &Address| {
-        if !spec.is_enabled_in(BaseBSpec::Azul) {
+        if !spec.is_enabled_in(BaseBSpec::Beryl) {
             None
         } else if *address == B20_FACTORY_ADDRESS {
             tracing::info!(address = %address, "base B20 factory precompile lookup");
@@ -250,7 +254,7 @@ pub(crate) fn charge_input_cost(
 /// accounting.
 #[inline]
 fn fill_state_gas(output: &mut PrecompileOutput, storage: &StorageCtx) {
-    if storage.spec().is_enabled_in(crate::BaseBSpec::Azul) && !output.reverted {
+    if storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) && !output.reverted {
         output.gas_refunded = storage.gas_refunded();
     }
 }

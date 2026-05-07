@@ -3,7 +3,6 @@
 //! This module tests the Storable derive macro's implementation of storage packing,
 //! verifying that fields are correctly packed into slots according to Solidity's rules.
 
-use crate::BaseBSpec;
 use alloy::primitives::FixedBytes;
 use base_precompiles::storage::{
     FromWord, Layout, StorableType, StorageCtx,
@@ -11,6 +10,7 @@ use base_precompiles::storage::{
 };
 
 use super::*;
+use crate::BaseBSpec;
 
 // Rule 1: Structs Always Start New Slots
 #[derive(Default, Debug, Clone, PartialEq, Eq, Storable)]
@@ -757,7 +757,7 @@ fn test_t4_store_packed_struct_skips_sload() -> eyre::Result<()> {
     })?;
 
     // -- T4: SLOAD is skipped, so unused bytes are zero (not garbage) --
-    let mut storage = HashMapStorageProvider::new_with_spec(1, BaseBSpec::Azul);
+    let mut storage = HashMapStorageProvider::new_with_spec(1, BaseBSpec::Beryl);
     StorageCtx::enter(&mut storage, || {
         // Pre-fill the slot with garbage
         U256::handle(base_slot, LayoutCtx::FULL, address).write(garbage)?;
@@ -789,7 +789,7 @@ fn test_t4_store_packed_struct_skips_sload() -> eyre::Result<()> {
 #[test]
 fn test_t4_struct_store_preserves_neighbor_slots() -> eyre::Result<()> {
     let address = Address::random();
-    let mut storage = HashMapStorageProvider::new_with_spec(1, BaseBSpec::Azul);
+    let mut storage = HashMapStorageProvider::new_with_spec(1, BaseBSpec::Beryl);
 
     StorageCtx::enter(&mut storage, || {
         let base_slot = U256::from(100);
@@ -879,7 +879,7 @@ fn test_t4_store_multi_slot_packed_skips_sload() -> eyre::Result<()> {
     })?;
 
     // -- T4: SLOADs are skipped for both packed slots --
-    let mut storage = HashMapStorageProvider::new_with_spec(1, BaseBSpec::Azul);
+    let mut storage = HashMapStorageProvider::new_with_spec(1, BaseBSpec::Beryl);
     StorageCtx::enter(&mut storage, || {
         // Pre-fill both slots with garbage
         U256::handle(base_slot, LayoutCtx::FULL, address).write(garbage)?;
@@ -905,7 +905,7 @@ fn test_t4_store_multi_slot_packed_skips_sload() -> eyre::Result<()> {
 #[test]
 fn test_t4_multi_slot_packed_preserves_neighbor_slots() -> eyre::Result<()> {
     let address = Address::random();
-    let mut storage = HashMapStorageProvider::new_with_spec(1, BaseBSpec::Azul);
+    let mut storage = HashMapStorageProvider::new_with_spec(1, BaseBSpec::Beryl);
 
     StorageCtx::enter(&mut storage, || {
         let base_slot = U256::from(200);

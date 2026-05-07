@@ -1,17 +1,17 @@
 //! ABI dispatch for the [`B403Registry`] precompile.
 
-use crate::BaseBSpec;
-use crate::{
-    Precompile, SelectorSchedule,
-    b403_registry::{AuthRole, B403Registry},
-    charge_input_cost, dispatch_call, mutate, mutate_void, view,
-};
 use alloy::{
     primitives::Address,
     sol_types::{SolCall, SolInterface},
 };
 use base_precompiles_contracts::IB403Registry::{self, IB403RegistryCalls};
 use revm::precompile::PrecompileResult;
+
+use crate::{
+    BaseBSpec, Precompile, SelectorSchedule,
+    b403_registry::{AuthRole, B403Registry},
+    charge_input_cost, dispatch_call, mutate, mutate_void, view,
+};
 
 const T2_ADDED: &[[u8; 4]] = &[
     IB403Registry::isAuthorizedSenderCall::SELECTOR,
@@ -29,7 +29,7 @@ impl Precompile for B403Registry {
 
         dispatch_call(
             calldata,
-            &[SelectorSchedule::new(BaseBSpec::Azul).with_added(T2_ADDED)],
+            &[SelectorSchedule::new(BaseBSpec::Beryl).with_added(T2_ADDED)],
             IB403RegistryCalls::abi_decode,
             |call| match call {
                 IB403RegistryCalls::policyIdCounter(call) => {

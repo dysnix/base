@@ -147,6 +147,12 @@ where
         )
         .map_err(BlockExecutionError::other)?;
 
+        #[cfg(feature = "std")]
+        {
+            let timestamp = self.evm.block().timestamp().saturating_to();
+            crate::beryl::ensure_native_erc20s(&self.spec, timestamp, &mut self.evm)?;
+        }
+
         Ok(())
     }
 

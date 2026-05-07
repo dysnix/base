@@ -11,33 +11,31 @@
 pub mod dispatch;
 pub mod roles;
 
-pub use base_precompiles_contracts::{
-    B20Error, B20Event, IB20, IRolesAuth, RolesAuthError, RolesAuthEvent, USD_CURRENCY,
-};
+use std::sync::LazyLock;
 
+use alloy::{
+    primitives::{Address, B256, U256, keccak256, uint},
+    sol_types::SolValue,
+};
+pub use base_precompiles_contracts::{
+    B20Error, B20Event, IB20, IRolesAuth, RolesAuthError, RolesAuthEvent,
+};
+use base_precompiles_macros::contract;
 // Re-export the generated slots module for external access to storage slot constants
 pub use slots as b20_slots;
+use tracing::trace;
 
-use crate::BaseBAddressExt;
 pub use crate::is_b20_prefix;
 use crate::{
+    BaseBAddressExt,
     b20::roles::DEFAULT_ADMIN_ROLE,
     b403_registry::{AuthRole, B403Registry, IB403Registry},
     error::{BasePrecompileError, Result},
     storage::{Handler, Mapping},
 };
-use alloy::{
-    primitives::{Address, B256, U256, keccak256, uint},
-    sol_types::SolValue,
-};
-use base_precompiles_macros::contract;
-use std::sync::LazyLock;
-use tracing::trace;
 
 /// u128::MAX as U256
 pub const U128_MAX: U256 = uint!(0xffffffffffffffffffffffffffffffff_U256);
-
-use base_precompiles_contracts::DECIMALS as B20_DECIMALS;
 
 /// B20 token contract — the native token standard on Base.
 ///
@@ -112,7 +110,7 @@ impl B20Token {
 
     /// Returns the token decimals (always 6 for B20).
     pub fn decimals(&self) -> Result<u8> {
-        Ok(B20_DECIMALS)
+        Ok(6)
     }
 
     /// Returns the token's currency denomination (e.g. `"USD"`).
@@ -373,7 +371,7 @@ impl B20Token {
     /// - `PolicyForbids` — target address is not blocked by policy
     pub fn burn_blocked(&mut self, msg_sender: Address, call: IB20::burnBlockedCall) -> Result<()> {
         // Validate burner role and (+T3) ensure token is not paused
-        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) {
+        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) {
             self.check_not_paused()?;
         }
         self.check_role(msg_sender, *BURN_BLOCKED_ROLE)?;
@@ -401,7 +399,7 @@ impl B20Token {
 
     fn _burn(&mut self, msg_sender: Address, amount: U256) -> Result<()> {
         // Validate issuer role and (+T3) ensure token is not paused
-        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) {
+        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) {
             self.check_not_paused()?;
         }
         self.check_role(msg_sender, *ISSUER_ROLE)?;
@@ -740,7 +738,7 @@ impl B20Token {
     /// Ensures that the recipient is authorized to receive mints.
     /// Additionally (+T3) checks pause state, validates the effective recipient.
     fn validate_mint(&self, to: &Recipient) -> Result<()> {
-        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) {
+        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) {
             self.check_not_paused()?;
             to.validate()?;
         }
@@ -767,7 +765,7 @@ impl B20Token {
 
         // (spec: +T2) short-circuit and skip recipient check if sender fails
         let sender_auth = registry.is_authorized_as(policy_id, from, AuthRole::sender())?;
-        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) && !sender_auth {
+        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) && !sender_auth {
             return Ok(false);
         }
         let recipient_auth = registry.is_authorized_as(policy_id, to, AuthRole::recipient())?;

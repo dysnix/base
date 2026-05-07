@@ -166,9 +166,10 @@ BASE_NODE_VERIFIER_L1_CONFS=15
 # Chain Configuration
 L1_CHAIN_ID=1337
 L2_CHAIN_ID=84538453
-# Optional: set to a non-negative block number to schedule Base Azul in devnet.
-# Leave unset to avoid setting base.azul/osakaTime during genesis generation.
-L2_BASE_AZUL_BLOCK=20
+# Optional: set to non-negative block numbers to schedule Base upgrades in devnet.
+# Leave unset to avoid setting base.azul/base.beryl during genesis generation.
+L2_BASE_AZUL_BLOCK=0
+L2_BASE_BERYL_BLOCK=3
 
 # Metering Resource Limits
 # Whole-block budgets for gas/state-root/DA, plus a per-flashblock execution budget.

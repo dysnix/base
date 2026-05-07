@@ -1,4 +1,3 @@
-use crate::BaseBSpec;
 use alloy::primitives::{Address, Log, LogData, U256};
 use alloy_evm::EvmInternals;
 use revm::{
@@ -7,7 +6,7 @@ use revm::{
     state::{AccountInfo, Bytecode},
 };
 
-use crate::{error::BasePrecompileError, storage::PrecompileStorageProvider};
+use crate::{BaseBSpec, error::BasePrecompileError, storage::PrecompileStorageProvider};
 
 /// Production [`PrecompileStorageProvider`] backed by the live EVM journal.
 ///
@@ -97,7 +96,7 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
             was_empty
         };
 
-        if self.spec.is_enabled_in(crate::BaseBSpec::Azul) && was_empty {
+        if self.spec.is_enabled_in(crate::BaseBSpec::Beryl) && was_empty {
             self.deduct_gas(self.gas_params.create_cost())?;
             self.deduct_gas(self.gas_params.keccak256_cost(code_len.div_ceil(32)))?;
         }
@@ -114,7 +113,7 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
         let additional_cost = self.gas_params.cold_account_additional_cost();
 
         // T4+: pre-charge static gas to avoid cheap useless work.
-        let insufficient_gas_for_cold_load = if self.spec.is_enabled_in(crate::BaseBSpec::Azul) {
+        let insufficient_gas_for_cold_load = if self.spec.is_enabled_in(crate::BaseBSpec::Beryl) {
             self.deduct_gas(self.gas_params.warm_storage_read_cost())?;
             self.gas_remaining < additional_cost
         } else {
@@ -130,7 +129,7 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
             account.is_cold
         };
 
-        if !self.spec.is_enabled_in(crate::BaseBSpec::Azul) {
+        if !self.spec.is_enabled_in(crate::BaseBSpec::Beryl) {
             self.deduct_gas(self.gas_params.warm_storage_read_cost())?;
         }
 
@@ -148,7 +147,7 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
         value: U256,
     ) -> Result<(), BasePrecompileError> {
         // T4+: pre-charge static gas before loading storage to avoid cheap useless work.
-        let insufficient_gas_for_cold_load = if self.spec.is_enabled_in(crate::BaseBSpec::Azul) {
+        let insufficient_gas_for_cold_load = if self.spec.is_enabled_in(crate::BaseBSpec::Beryl) {
             self.deduct_gas(self.gas_params.sstore_static_gas())?;
             self.gas_remaining < self.gas_params.cold_storage_additional_cost()
         } else {
@@ -161,7 +160,7 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
             insufficient_gas_for_cold_load,
         )?;
 
-        if !self.spec.is_enabled_in(crate::BaseBSpec::Azul) {
+        if !self.spec.is_enabled_in(crate::BaseBSpec::Beryl) {
             self.deduct_gas(self.gas_params.sstore_static_gas())?;
         }
 
@@ -203,7 +202,7 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
         let additional_cost = self.gas_params.cold_storage_additional_cost();
 
         // T4+: pre-charge static gas to avoid cheap useless work.
-        let insufficient_gas_for_cold_load = if self.spec.is_enabled_in(crate::BaseBSpec::Azul) {
+        let insufficient_gas_for_cold_load = if self.spec.is_enabled_in(crate::BaseBSpec::Beryl) {
             self.deduct_gas(self.gas_params.warm_storage_read_cost())?;
             self.gas_remaining < additional_cost
         } else {
@@ -220,7 +219,7 @@ impl<'a> PrecompileStorageProvider for EvmPrecompileStorageProvider<'a> {
             is_cold = val.is_cold;
         };
 
-        if !self.spec.is_enabled_in(crate::BaseBSpec::Azul) {
+        if !self.spec.is_enabled_in(crate::BaseBSpec::Beryl) {
             self.deduct_gas(self.gas_params.warm_storage_read_cost())?;
         }
 

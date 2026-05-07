@@ -21,16 +21,16 @@ use crate::{
 pub struct BaseEvmFactory;
 
 impl BaseEvmFactory {
-    fn precompiles(input: &EvmEnv<OpSpecId>) -> PrecompilesMap {
+    fn precompiles(input: &EvmEnv<BaseSpecId>) -> PrecompilesMap {
         let spec_id = input.cfg_env.spec;
         let mut precompiles =
             PrecompilesMap::from_static(BasePrecompiles::new_with_spec(spec_id).precompiles());
 
         #[cfg(feature = "std")]
-        if spec_id.is_enabled_in(OpSpecId::AZUL) {
+        if spec_id.is_enabled_in(BaseSpecId::BERYL) {
             base_precompiles::extend_base_b_precompiles(
                 &mut precompiles,
-                base_precompiles::BaseBSpec::Azul,
+                base_precompiles::BaseBSpec::Beryl,
                 input.cfg_env.gas_params.clone(),
             );
         }

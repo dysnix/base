@@ -7,7 +7,7 @@
 
 pub mod dispatch;
 
-use crate::StorageCtx;
+use alloy::primitives::Address;
 pub use base_precompiles_contracts::{
     B403RegistryError, B403RegistryEvent,
     IB403Registry::{self, PolicyType},
@@ -15,11 +15,10 @@ pub use base_precompiles_contracts::{
 use base_precompiles_macros::{Storable, contract};
 
 use crate::{
-    B403_REGISTRY_ADDRESS, BaseBAddressExt,
+    B403_REGISTRY_ADDRESS, BaseBAddressExt, StorageCtx,
     error::{BasePrecompileError, Result},
     storage::{Handler, Mapping},
 };
-use alloy::primitives::Address;
 
 /// Built-in policy ID that always rejects authorization.
 pub const REJECT_ALL_POLICY_ID: u64 = 0;
@@ -102,7 +101,7 @@ pub struct PolicyData {
 impl PolicyData {
     /// Decodes the raw `policy_type` u8 to a `PolicyType` enum.
     fn policy_type(&self) -> Result<PolicyType> {
-        let is_t2 = StorageCtx.spec().is_enabled_in(crate::BaseBSpec::Azul);
+        let is_t2 = StorageCtx.spec().is_enabled_in(crate::BaseBSpec::Beryl);
 
         match self.policy_type.try_into() {
             Ok(ty) if is_t2 || ty != PolicyType::COMPOUND => Ok(ty),
@@ -165,7 +164,7 @@ impl B403Registry {
         &self,
         call: IB403Registry::policyDataCall,
     ) -> Result<IB403Registry::policyDataReturn> {
-        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) {
+        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) {
             // Built-in policies are virtual (not stored), and match the `PolicyType`:
             //  - 0: REJECT_ALL_POLICY_ID → WHITELIST
             //  - 1: ALLOW_ALL_POLICY_ID  → BLACKLIST
@@ -280,7 +279,7 @@ impl B403Registry {
         let policy_type = call.policyType.ensure_is_simple()?;
 
         // B1022: reject virtual addresses in initial account set (spec T3+)
-        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) {
+        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) {
             for account in call.accounts.iter() {
                 if account.is_virtual() {
                     return Err(B403RegistryError::virtual_address_not_allowed().into());
@@ -387,7 +386,7 @@ impl B403Registry {
         call: IB403Registry::modifyPolicyWhitelistCall,
     ) -> Result<()> {
         // B1022: virtual addresses are forwarding aliases, not valid policy members (spec: T3+)
-        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) && call.account.is_virtual() {
+        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) && call.account.is_virtual() {
             return Err(B403RegistryError::virtual_address_not_allowed().into());
         }
 
@@ -426,7 +425,7 @@ impl B403Registry {
         call: IB403Registry::modifyPolicyBlacklistCall,
     ) -> Result<()> {
         // B1022: virtual addresses are forwarding aliases, not valid policy members (spec: T3+)
-        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) && call.account.is_virtual() {
+        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) && call.account.is_virtual() {
             return Err(B403RegistryError::virtual_address_not_allowed().into());
         }
 
@@ -531,7 +530,7 @@ impl B403Registry {
                 AuthRole::Transfer => {
                     // (spec: +T2) short-circuit and skip recipient check if sender fails
                     let sender_auth = self.is_authorized_simple(compound.sender_policy_id, user)?;
-                    if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) && !sender_auth {
+                    if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) && !sender_auth {
                         return Ok(false);
                     }
                     let recipient_auth =
@@ -611,7 +610,7 @@ impl B403Registry {
 
         // Verify that the policy id exists (spec: +T2).
         // Skip the counter read (extra SLOAD) when policy data is non-default.
-        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul)
+        if self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl)
             && data.is_default()
             && policy_id >= self.policy_id_counter()?
         {
@@ -633,7 +632,7 @@ impl B403Registry {
 impl AuthRole {
     #[inline]
     fn transfer_or(t2_variant: Self) -> Self {
-        if StorageCtx.spec().is_enabled_in(crate::BaseBSpec::Azul) {
+        if StorageCtx.spec().is_enabled_in(crate::BaseBSpec::Beryl) {
             t2_variant
         } else {
             Self::Transfer
@@ -664,7 +663,7 @@ impl AuthRole {
 /// Returns `true` if the error indicates a failed policy lookup — the policy type is invalid
 /// or the policy doesn't exist.
 pub fn is_policy_lookup_error(e: &BasePrecompileError) -> bool {
-    if StorageCtx.spec().is_enabled_in(crate::BaseBSpec::Azul) {
+    if StorageCtx.spec().is_enabled_in(crate::BaseBSpec::Beryl) {
         // T2+: typed B403 errors
         *e == B403RegistryError::invalid_policy_type().into()
             || *e == B403RegistryError::policy_not_found().into()
@@ -689,7 +688,7 @@ impl PolicyTypeExt for PolicyType {
         match self {
             Self::WHITELIST | Self::BLACKLIST => Ok(*self as u8),
             Self::COMPOUND | Self::__Invalid => {
-                if StorageCtx.spec().is_enabled_in(crate::BaseBSpec::Azul) {
+                if StorageCtx.spec().is_enabled_in(crate::BaseBSpec::Beryl) {
                     Err(B403RegistryError::incompatible_policy_type().into())
                 } else {
                     Ok(Self::__Invalid as u8)

@@ -1,4 +1,5 @@
-use crate::BaseBSpec;
+use std::{cell::RefCell, fmt::Debug};
+
 use alloy::{
     primitives::{Address, B256, Bytes, LogData, U256},
     sol_types::SolInterface,
@@ -12,10 +13,9 @@ use revm::{
     state::{AccountInfo, Bytecode},
 };
 use scoped_tls::scoped_thread_local;
-use std::{cell::RefCell, fmt::Debug};
 
 use crate::{
-    Precompile,
+    BaseBSpec, Precompile,
     error::{BasePrecompileError, Result},
     storage::{PrecompileStorageProvider, evm::EvmPrecompileStorageProvider},
 };
@@ -222,7 +222,11 @@ impl StorageCtx {
     pub fn checkpoint(&mut self) -> CheckpointGuard {
         // spec: only available +T1C. Prior to that checkpoints are a no-op.
         let checkpoint = Self::with_storage(|s| {
-            if s.spec().is_enabled_in(crate::BaseBSpec::Azul) { Some(s.checkpoint()) } else { None }
+            if s.spec().is_enabled_in(crate::BaseBSpec::Beryl) {
+                Some(s.checkpoint())
+            } else {
+                None
+            }
         });
 
         CheckpointGuard { checkpoint }

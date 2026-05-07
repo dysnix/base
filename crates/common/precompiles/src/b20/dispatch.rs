@@ -1,19 +1,19 @@
 //! ABI dispatch for the [`B20Token`] precompile.
 
-use crate::BaseBSpec;
-use crate::{
-    Precompile, SelectorSchedule,
-    b20::{B20Token, IB20},
-    charge_input_cost, dispatch_call, metadata, mutate, mutate_void,
-    storage::ContractStorage,
-    view,
-};
 use alloy::{
     primitives::Address,
     sol_types::{SolCall, SolInterface},
 };
 use base_precompiles_contracts::{B20Error, IB20::IB20Calls, IRolesAuth::IRolesAuthCalls};
 use revm::precompile::PrecompileResult;
+
+use crate::{
+    BaseBSpec, Precompile, SelectorSchedule,
+    b20::{B20Token, IB20},
+    charge_input_cost, dispatch_call, metadata, mutate, mutate_void,
+    storage::ContractStorage,
+    view,
+};
 
 const T2_ADDED: &[[u8; 4]] =
     &[IB20::permitCall::SELECTOR, IB20::noncesCall::SELECTOR, IB20::DOMAIN_SEPARATORCall::SELECTOR];
@@ -46,7 +46,7 @@ impl Precompile for B20Token {
         // Ensure that the token is initialized (has bytecode)
         let initialized = match self.is_initialized() {
             Ok(v) => v,
-            Err(_) if !self.storage.spec().is_enabled_in(crate::BaseBSpec::Azul) => false,
+            Err(_) if !self.storage.spec().is_enabled_in(crate::BaseBSpec::Beryl) => false,
             Err(e) => return self.storage.error_result(e),
         };
         if !initialized {
@@ -55,7 +55,7 @@ impl Precompile for B20Token {
 
         dispatch_call(
             calldata,
-            &[SelectorSchedule::new(BaseBSpec::Azul).with_added(T2_ADDED)],
+            &[SelectorSchedule::new(BaseBSpec::Beryl).with_added(T2_ADDED)],
             B20Call::decode,
             |call| match call {
                 // Metadata functions (no calldata decoding needed)

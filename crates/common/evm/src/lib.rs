@@ -54,6 +54,11 @@ pub use receipt_builder::{AlloyReceiptBuilder, BaseReceiptBuilder};
 mod canyon;
 pub use canyon::ensure_create2_deployer;
 
+#[cfg(feature = "std")]
+mod beryl;
+#[cfg(feature = "std")]
+pub use beryl::ensure_native_erc20s;
+
 mod executor;
 pub use executor::{
     BaseBlockExecutionCtx, BaseBlockExecutor, BaseBlockExecutorFactory, BaseTxResult,
