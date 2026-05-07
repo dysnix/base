@@ -14,6 +14,8 @@ pub use error::{IntoPrecompileResult, Result};
 pub mod storage;
 
 pub mod b20;
+mod base_dex;
+pub use base_dex::{BaseDex, FEE_DENOMINATOR, FEE_NUMERATOR, MINIMUM_LIQUIDITY, Pool};
 pub mod b20_factory;
 pub mod b403_registry;
 
@@ -25,7 +27,10 @@ use alloy::{
     sol_types::{SolCall, SolError},
 };
 use alloy_evm::precompiles::{DynPrecompile, PrecompilesMap};
-pub use base_precompiles_contracts::{B20_FACTORY_ADDRESS, B403_REGISTRY_ADDRESS};
+pub use base_precompiles_contracts::{
+    B20_FACTORY_ADDRESS, B403_REGISTRY_ADDRESS, BASE_DEX_ADDRESS, BASE_USD_ADDRESS, BaseDexError,
+    BaseDexEvent, IBaseDex,
+};
 use revm::{
     context::CfgEnv,
     context_interface::cfg::GasParams,
@@ -122,6 +127,9 @@ pub fn extend_base_b_precompiles(
         } else if *address == B403_REGISTRY_ADDRESS {
             tracing::info!(address = %address, "base B403 registry precompile lookup");
             Some(B403Registry::create_precompile(spec, gas_params.clone()))
+        } else if *address == BASE_DEX_ADDRESS {
+            tracing::info!(address = %address, "base DEX precompile lookup");
+            Some(BaseDex::create_precompile(spec, gas_params.clone()))
         } else if address.is_b20() {
             tracing::info!(address = %address, "base B20 precompile lookup");
             Some(B20Token::create_precompile(*address, spec, gas_params.clone()))
@@ -172,6 +180,13 @@ impl B20Factory {
     /// Creates the EVM precompile for this type.
     pub fn create_precompile(spec: BaseBSpec, gas_params: GasParams) -> DynPrecompile {
         base_precompile!("B20Factory", spec, gas_params, |input| { Self::new() })
+    }
+}
+
+impl BaseDex {
+    /// Creates the EVM precompile for this type.
+    pub fn create_precompile(spec: BaseBSpec, gas_params: GasParams) -> DynPrecompile {
+        base_precompile!("BaseDex", spec, gas_params, |input| { Self::new() })
     }
 }
 

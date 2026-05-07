@@ -6,6 +6,8 @@ mod common_errors;
 pub use common_errors::*;
 mod b20;
 pub use b20::*;
+mod base_dex;
+pub use base_dex::*;
 mod b20_factory;
 pub use b20_factory::*;
 mod b403_registry;

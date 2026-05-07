@@ -16,7 +16,7 @@ use alloy::{
 };
 use alloy_evm::EvmInternalsError;
 use base_precompiles_contracts::{
-    B20FactoryError, B403RegistryError, RolesAuthError, UnknownFunctionSelector,
+    B20FactoryError, B403RegistryError, BaseDexError, RolesAuthError, UnknownFunctionSelector,
 };
 use revm::{
     context::journaled_state::JournalLoadError,
@@ -43,6 +43,10 @@ pub enum BasePrecompileError {
     /// Error from 403 registry
     #[error("B403 registry error: {0:?}")]
     B403RegistryError(B403RegistryError),
+
+    /// Error from Base DEX
+    #[error("Base DEX error: {0:?}")]
+    BaseDex(BaseDexError),
 
     /// EVM panic (i.e. arithmetic under/overflow, out-of-bounds access).
     #[error("Panic({0:?})")]
@@ -100,6 +104,7 @@ impl BasePrecompileError {
             Self::B20(_)
             | Self::B20Factory(_)
             | Self::RolesAuthError(_)
+            | Self::BaseDex(_)
             | Self::B403RegistryError(_)
             | Self::UnknownFunctionSelector(_) => false,
         }
@@ -127,6 +132,7 @@ impl BasePrecompileError {
             Self::B20Factory(e) => e.abi_encode().into(),
             Self::RolesAuthError(e) => e.abi_encode().into(),
             Self::B403RegistryError(e) => e.abi_encode().into(),
+            Self::BaseDex(e) => e.abi_encode().into(),
             Self::Panic(kind) => {
                 let panic = Panic { code: U256::from(kind as u32) };
 
@@ -186,6 +192,7 @@ pub fn error_decoder_registry() -> BasePrecompileErrorRegistry {
     add_errors_to_registry(&mut registry, BasePrecompileError::B20Factory);
     add_errors_to_registry(&mut registry, BasePrecompileError::RolesAuthError);
     add_errors_to_registry(&mut registry, BasePrecompileError::B403RegistryError);
+    add_errors_to_registry(&mut registry, BasePrecompileError::BaseDex);
 
     registry
 }
