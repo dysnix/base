@@ -4455,6 +4455,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "base-load-tests-bin"
+version = "0.0.0"
+dependencies = [
+ "alloy-signer-local",
+ "base-load-tests",
+ "clap",
+ "eyre",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "base-metering"
 version = "0.0.0"
 dependencies = [

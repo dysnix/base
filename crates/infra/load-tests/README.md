@@ -7,6 +7,7 @@ Load testing and benchmarking framework for Base infrastructure.
 | Crate | Description |
 |-------|-------------|
 | `base-load-tests` | Core library with workload generation, transaction submission, and metrics collection |
+| `base-load-tests-bin` | `base-load-tests` executable wrapper |
 
 ## Goals
 
@@ -30,11 +31,14 @@ Or run directly with cargo:
 # Build the crate
 cargo build -p base-load-tests
 
+# Build the binary
+cargo build -p base-load-tests-bin
+
 # Run tests
 cargo test -p base-load-tests
 
 # Run the load test binary with a config file
-cargo run -p base-load-tests --bin base-load-test -- path/to/config.yaml
+cargo run -p base-load-tests-bin -- path/to/config.yaml
 ```
 
 ## Configuration

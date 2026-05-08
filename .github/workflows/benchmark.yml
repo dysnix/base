@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 jobs:
-  # Build base-reth-node, base-builder, and base-load-test together, cached by source hash
+  # Build base-reth-node, base-builder, and base-load-tests together, cached by source hash
   build-binaries:
     name: Build binaries
     runs-on: ubuntu-latest
@@ -67,11 +67,11 @@ jobs:
           cargo build --locked --bin base-builder --profile maxperf
           cp target/maxperf/base-builder ~/bin/base-builder
 
-      - name: Build base-load-test
+      - name: Build base-load-tests
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         run: |
-          cargo build --locked -p base-load-tests --bin base-load-test --profile maxperf
-          cp target/maxperf/base-load-test ~/bin/base-load-test
+          cargo build --locked -p base-load-tests-bin --bin base-load-tests --profile maxperf
+          cp target/maxperf/base-load-tests ~/bin/base-load-tests
 
       - name: Verify binaries exist
         run: |
@@ -146,7 +146,7 @@ jobs:
             --output-dir ${{ runner.temp }}/output \
             --builder-bin ${{ runner.temp }}/bin/base-builder \
             --base-reth-node-bin ${{ runner.temp }}/bin/base-reth-node \
-            --load-test-bin ${{ runner.temp }}/bin/base-load-test
+            --load-test-bin ${{ runner.temp }}/bin/base-load-tests
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
