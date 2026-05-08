@@ -21,13 +21,16 @@ before opening that PR.
 
 ## Image layout
 
-| Service          | Image                                |
-| ---------------- | ------------------------------------ |
-| base-reth-node   | `ghcr.io/dysnix/base-reth-node`      |
-| base-consensus   | `ghcr.io/dysnix/base-consensus`      |
-
-Phase 2 will add the remaining services (`base-builder`, `base-batcher`,
-`base-proposer`, `websocket-proxy`, `ingress-rpc`, `audit-archiver`).
+| Bake target       | Image                                  |
+| ----------------- | -------------------------------------- |
+| `client`          | `ghcr.io/dysnix/base-reth-node`        |
+| `consensus`       | `ghcr.io/dysnix/base-consensus`        |
+| `builder`         | `ghcr.io/dysnix/base-builder`          |
+| `batcher`         | `ghcr.io/dysnix/base-batcher`          |
+| `proposer`        | `ghcr.io/dysnix/base-proposer`         |
+| `websocket-proxy` | `ghcr.io/dysnix/websocket-proxy`       |
+| `ingress-rpc`     | `ghcr.io/dysnix/ingress-rpc`           |
+| `audit-archiver`  | `ghcr.io/dysnix/audit-archiver`        |
 
 Tags:
 - `vX.Y.Z` — built from the upstream tag of the same name

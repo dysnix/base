@@ -1,10 +1,8 @@
 name: dysnix - Build and push images
 
-# Builds multi-arch (linux/amd64 + linux/arm64) container images for selected
-# Base services from a specified upstream release tag, and pushes them to
-# ghcr.io/dysnix/<image>:<tag>.
-#
-# Phase 1: client + consensus only. Other services are wired up in Phase 2.
+# Builds multi-arch (linux/amd64 + linux/arm64) container images for all 8
+# Base service targets defined in etc/docker/docker-bake.hcl, from a specified
+# upstream release tag, and pushes them to ghcr.io/dysnix/<image>:<tag>.
 #
 # Trigger: manual dispatch with the upstream tag to build (e.g. v0.7.6).
 
@@ -39,22 +37,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        target:
+          - client
+          - consensus
+          - builder
+          - batcher
+          - proposer
+          - websocket-proxy
+          - ingress-rpc
+          - audit-archiver
+        arch:
+          - linux/amd64
+          - linux/arm64
         include:
+          # target → image-name mapping
           - target: client
             image: base-reth-node
-            arch: linux/amd64
-            runs-on: ubuntu-24.04
-          - target: client
-            image: base-reth-node
-            arch: linux/arm64
-            runs-on: ubuntu-24.04-arm
           - target: consensus
             image: base-consensus
-            arch: linux/amd64
+          - target: builder
+            image: base-builder
+          - target: batcher
+            image: base-batcher
+          - target: proposer
+            image: base-proposer
+          - target: websocket-proxy
+            image: websocket-proxy
+          - target: ingress-rpc
+            image: ingress-rpc
+          - target: audit-archiver
+            image: audit-archiver
+          # arch → runner mapping
+          - arch: linux/amd64
             runs-on: ubuntu-24.04
-          - target: consensus
-            image: base-consensus
-            arch: linux/arm64
+          - arch: linux/arm64
             runs-on: ubuntu-24.04-arm
     runs-on: ${{ matrix.runs-on }}
     steps:
@@ -118,6 +134,18 @@ jobs:
             image: base-reth-node
           - target: consensus
             image: base-consensus
+          - target: builder
+            image: base-builder
+          - target: batcher
+            image: base-batcher
+          - target: proposer
+            image: base-proposer
+          - target: websocket-proxy
+            image: websocket-proxy
+          - target: ingress-rpc
+            image: ingress-rpc
+          - target: audit-archiver
+            image: audit-archiver
     runs-on: ubuntu-latest
     steps:
       - name: Download digests
