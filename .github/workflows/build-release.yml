@@ -14,7 +14,7 @@ on:
         default: false
 
 env:
-  REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/node-reth-dev
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
   RELEASE_BINS: |
     base-reth-node
     basectl
@@ -115,10 +115,24 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Build multi-arch Docker images
+  # Build multi-arch Docker images for all working bake targets.
+  # NOTE: audit-archiver is intentionally not built here even though the
+  # bake target exists. Its `cargo build --package audit-archiver`
+  # currently fails and there's no existing CI exercising it; can be
+  # added once the source build is fixed.
   build-and-push:
     strategy:
+      fail-fast: false
       matrix:
+        service:
+          # Image name preserved for back-compat with the existing client image stream.
+          - { target: client,          image: node-reth-dev }
+          - { target: consensus,       image: consensus-dev }
+          - { target: builder,         image: builder-dev }
+          - { target: batcher,         image: batcher-dev }
+          - { target: proposer,        image: proposer-dev }
+          - { target: websocket-proxy, image: websocket-proxy-dev }
+          - { target: ingress-rpc,     image: ingress-rpc-dev }
         settings:
           - arch: linux/amd64
             runs-on: ubuntu-24.04
@@ -137,6 +151,7 @@ jobs:
         run: |
           platform="${{ matrix.settings.arch }}"
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          echo "REGISTRY_IMAGE=${{ env.REGISTRY }}/${{ matrix.service.image }}" >> $GITHUB_ENV
 
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -163,35 +178,50 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        env:
+          TARGET: ${{ matrix.service.target }}
         run: |
-          docker buildx bake -f etc/docker/docker-bake.hcl client \
-            --set client.tags=${{ env.REGISTRY_IMAGE }} \
-            --set client.platform=${{ matrix.settings.arch }} \
-            --set client.output=type=image,push-by-digest=true,name-canonical=true,push=true \
-            --set client.cache-to=type=registry,ref=${{ env.REGISTRY_IMAGE }}:cache-${{ env.PLATFORM_PAIR }},mode=max \
-            --set client.labels.org.opencontainers.image.source=${{ steps.image-labels.outputs.source }} \
-            --set client.labels.org.opencontainers.image.revision=${{ steps.image-labels.outputs.revision }} \
-            --set client.labels.org.opencontainers.image.created=${{ steps.image-labels.outputs.created }} \
-            --set client.labels.org.opencontainers.image.version=${{ steps.image-labels.outputs.version }} \
-            --metadata-file ${{ runner.temp }}/client-metadata.json
+          docker buildx bake -f etc/docker/docker-bake.hcl "$TARGET" \
+            --set "${TARGET}.tags=${REGISTRY_IMAGE}" \
+            --set "${TARGET}.platform=${{ matrix.settings.arch }}" \
+            --set "${TARGET}.output=type=image,push-by-digest=true,name-canonical=true,push=true" \
+            --set "${TARGET}.cache-to=type=registry,ref=${REGISTRY_IMAGE}:cache-${PLATFORM_PAIR},mode=max" \
+            --set "${TARGET}.labels.org.opencontainers.image.source=${{ steps.image-labels.outputs.source }}" \
+            --set "${TARGET}.labels.org.opencontainers.image.revision=${{ steps.image-labels.outputs.revision }}" \
+            --set "${TARGET}.labels.org.opencontainers.image.created=${{ steps.image-labels.outputs.created }}" \
+            --set "${TARGET}.labels.org.opencontainers.image.version=${{ steps.image-labels.outputs.version }}" \
+            --metadata-file "${{ runner.temp }}/${TARGET}-metadata.json"
 
       - name: Export digest
+        env:
+          TARGET: ${{ matrix.service.target }}
         run: |
-          mkdir -p ${{ runner.temp }}/digests
-          digest="$(jq -er '."client"."containerimage.digest"' ${{ runner.temp }}/client-metadata.json)"
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="$(jq -er ".\"${TARGET}\".\"containerimage.digest\"" "${{ runner.temp }}/${TARGET}-metadata.json")"
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: digests-${{ env.PLATFORM_PAIR }}
+          name: digests-${{ matrix.service.target }}-${{ env.PLATFORM_PAIR }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
 
-  # Merge manifests and publish
-  publish:
-    needs: [build-and-push, build-binaries]
+  # Merge per-arch digests into a multi-arch manifest, one job per service.
+  publish-images:
+    needs: build-and-push
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - { target: client,          image: node-reth-dev }
+          - { target: consensus,       image: consensus-dev }
+          - { target: builder,         image: builder-dev }
+          - { target: batcher,         image: batcher-dev }
+          - { target: proposer,        image: proposer-dev }
+          - { target: websocket-proxy, image: websocket-proxy-dev }
+          - { target: ingress-rpc,     image: ingress-rpc-dev }
     runs-on: ubuntu-latest
 
     steps:
@@ -200,18 +230,14 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ inputs.tag }}
-          fetch-depth: 0
-          fetch-tags: true
+      - name: Set REGISTRY_IMAGE
+        run: echo "REGISTRY_IMAGE=${{ env.REGISTRY }}/${{ matrix.service.image }}" >> $GITHUB_ENV
 
       - name: Download digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          pattern: digests-${{ matrix.service.target }}-*
           merge-multiple: true
 
       - name: Login to GHCR
@@ -228,14 +254,12 @@ jobs:
         id: tags
         run: |
           TAG="${{ inputs.tag }}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
           if [[ "$TAG" =~ -rc\. ]]; then
-            echo "docker_tags=${{ env.REGISTRY_IMAGE }}:${TAG}" >> $GITHUB_OUTPUT
+            echo "docker_tags=${REGISTRY_IMAGE}:${TAG}" >> $GITHUB_OUTPUT
           else
             VERSION="${TAG#v}"
             IFS='.' read -r major minor patch <<< "$VERSION"
-            echo "docker_tags=${{ env.REGISTRY_IMAGE }}:${TAG},${{ env.REGISTRY_IMAGE }}:${major}.${minor},${{ env.REGISTRY_IMAGE }}:${major},${{ env.REGISTRY_IMAGE }}:latest" >> $GITHUB_OUTPUT
+            echo "docker_tags=${REGISTRY_IMAGE}:${TAG},${REGISTRY_IMAGE}:${major}.${minor},${REGISTRY_IMAGE}:${major},${REGISTRY_IMAGE}:latest" >> $GITHUB_OUTPUT
           fi
 
       - name: Create manifest list and push
@@ -244,7 +268,7 @@ jobs:
           shopt -s nullglob
           DIGESTS=(*)
           if [[ ${#DIGESTS[@]} -eq 0 ]]; then
-            echo "::error::No digests found — build-and-push may have failed"
+            echo "::error::No digests found for ${{ matrix.service.target }} — build-and-push may have failed"
             exit 1
           fi
 
@@ -255,14 +279,32 @@ jobs:
           done
 
           docker buildx imagetools create $TAG_ARGS \
-            $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' "${DIGESTS[@]}")
+            $(printf "${REGISTRY_IMAGE}@sha256:%s " "${DIGESTS[@]}")
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.tags.outputs.tag }}
+          docker buildx imagetools inspect "${REGISTRY_IMAGE}:${{ inputs.tag }}"
+
+  # Final-release-only steps: GH release + binary upload + summary.
+  # Runs once, after both image and binary builds finish.
+  release:
+    needs: [publish-images, build-binaries]
+    if: inputs.is_final
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@002fdce3c6a235733a90a27c80493a3241e56863 # v2.12.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Create GitHub Release
-        if: inputs.is_final
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -274,7 +316,6 @@ jobs:
           fi
 
       - name: Download binary artifacts
-        if: inputs.is_final
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: ${{ runner.temp }}/binaries
@@ -282,7 +323,6 @@ jobs:
           merge-multiple: true
 
       - name: Upload binaries to GitHub Release
-        if: inputs.is_final
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -292,18 +332,41 @@ jobs:
       - name: Summary
         run: |
           TAG="${{ inputs.tag }}"
+          {
+            echo "## Release Published"
+            echo
+            echo "**Tag**: \`$TAG\`"
+            echo "**Type**: Final Release"
+            echo
+            echo "### Docker Images"
+            echo
+            echo "\`\`\`bash"
+            for img in node-reth-dev consensus-dev builder-dev batcher-dev proposer-dev websocket-proxy-dev ingress-rpc-dev; do
+              echo "docker pull ${{ env.REGISTRY }}/${img}:${TAG}"
+            done
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "## Release Published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tag**: \`$TAG\`" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ inputs.is_final }}" == "true" ]]; then
-            echo "**Type**: Final Release" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**Type**: Release Candidate" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Docker Images" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY_IMAGE }}:${TAG}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+  # RC-only summary path
+  rc-summary:
+    needs: publish-images
+    if: ${{ !inputs.is_final }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          TAG="${{ inputs.tag }}"
+          {
+            echo "## Release Published"
+            echo
+            echo "**Tag**: \`$TAG\`"
+            echo "**Type**: Release Candidate"
+            echo
+            echo "### Docker Images"
+            echo
+            echo "\`\`\`bash"
+            for img in node-reth-dev consensus-dev builder-dev batcher-dev proposer-dev websocket-proxy-dev ingress-rpc-dev; do
+              echo "docker pull ${{ env.REGISTRY }}/${img}:${TAG}"
+            done
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
