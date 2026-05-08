@@ -272,7 +272,7 @@ pub struct ProofRequestListItem {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
-/// Offset pagination parameters 
+/// Offset pagination parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProofRequestPage {
     limit: i64,
@@ -282,6 +282,10 @@ pub struct ProofRequestPage {
 impl ProofRequestPage {
     /// Create pagination parameters from API-level unsigned values.
     pub fn try_new(limit: u64, offset: u64) -> Result<Self, String> {
+        if limit == 0 {
+            return Err("limit must be greater than zero".to_owned());
+        }
+
         let limit =
             i64::try_from(limit).map_err(|_| "limit exceeds maximum supported value".to_owned())?;
         let offset = i64::try_from(offset)

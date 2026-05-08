@@ -159,6 +159,12 @@ mod tests {
     }
 
     #[test]
+    fn proof_request_page_rejects_zero_limit() {
+        let err = ProofRequestPage::try_new(0, 0).unwrap_err();
+        assert_eq!(err, "limit must be greater than zero");
+    }
+
+    #[test]
     fn status_filter_maps_unset_unspecified_and_valid_values() {
         assert_eq!(parse_status_filter(None).unwrap(), None);
         assert_eq!(
