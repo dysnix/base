@@ -117,7 +117,7 @@ impl LoadTest {
             &funding_key,
             funding_amount,
             swap_token_amount,
-            &mp,
+            mp,
             load_config.duration,
         )
         .await;
