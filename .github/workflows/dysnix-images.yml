@@ -37,6 +37,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # NOTE: audit-archiver is intentionally excluded. Its bake target is
+        # defined in etc/docker/docker-bake.hcl but `cargo build --package
+        # audit-archiver` fails at every release tag we've tried, and upstream
+        # has no CI job that exercises it. We don't fight source issues here.
         target:
           - client
           - consensus
@@ -45,7 +49,6 @@ jobs:
           - proposer
           - websocket-proxy
           - ingress-rpc
-          - audit-archiver
         arch:
           - linux/amd64
           - linux/arm64
@@ -65,8 +68,6 @@ jobs:
             image: websocket-proxy
           - target: ingress-rpc
             image: ingress-rpc
-          - target: audit-archiver
-            image: audit-archiver
           # arch → runner mapping
           - arch: linux/amd64
             runs-on: ubuntu-24.04
@@ -144,8 +145,6 @@ jobs:
             image: websocket-proxy
           - target: ingress-rpc
             image: ingress-rpc
-          - target: audit-archiver
-            image: audit-archiver
     runs-on: ubuntu-latest
     steps:
       - name: Download digests

@@ -30,7 +30,12 @@ before opening that PR.
 | `proposer`        | `ghcr.io/dysnix/base-proposer`         |
 | `websocket-proxy` | `ghcr.io/dysnix/websocket-proxy`       |
 | `ingress-rpc`     | `ghcr.io/dysnix/ingress-rpc`           |
-| `audit-archiver`  | `ghcr.io/dysnix/audit-archiver`        |
+
+The 8th bake target — `audit-archiver` — is intentionally not built.
+Its `cargo build --package audit-archiver` fails at every release tag
+we've tried and upstream has no CI for it either, so we don't fight
+that source-side issue. If/when upstream gets it building, it can be
+wired back into our matrix.
 
 Tags:
 - `vX.Y.Z` — built from the upstream tag of the same name
