@@ -3,8 +3,9 @@ use uuid::Uuid;
 
 use crate::{
     CreateOutboxEntry, CreateProofRequest, CreateProofSession, MarkOutboxError,
-    MarkOutboxProcessed, OutboxEntry, ProofRequest, ProofSession, ProofStatus, ProofType,
-    RetryOutcome, SessionStatus, SessionType, UpdateProofSession, UpdateReceipt,
+    MarkOutboxProcessed, OutboxEntry, ProofRequest, ProofRequestListItem, ProofRequestPage,
+    ProofSession, ProofStatus, ProofType, RetryOutcome, SessionStatus, SessionType,
+    UpdateProofSession, UpdateReceipt,
 };
 
 /// Repository for proof request database operations
@@ -848,23 +849,15 @@ impl ProofRequestRepo {
     pub async fn list_with_offset(
         &self,
         status_filter: Option<ProofStatus>,
-        limit: u64,
-        offset: u64,
-    ) -> Result<(Vec<ProofRequest>, u64)> {
-        let limit = i64::try_from(limit)
-            .map_err(|_| sqlx::Error::Protocol("limit exceeds i64 range".into()))?;
-        let offset = i64::try_from(offset)
-            .map_err(|_| sqlx::Error::Protocol("offset exceeds i64 range".into()))?;
-
+        page: ProofRequestPage,
+    ) -> Result<(Vec<ProofRequestListItem>, u64)> {
         let (rows, count) = if let Some(status) = status_filter {
-            let rows = sqlx::query(
+            let rows = sqlx::query_as::<_, ProofRequestListItem>(
                 r#"
                 SELECT
                     id, start_block_number, number_of_blocks_to_prove,
-                    sequence_window, proof_type,
-                    status, error_message,
-                    prover_address, l1_head, intermediate_root_interval,
-                    created_at, updated_at, completed_at, retry_count
+                    proof_type, status, error_message,
+                    created_at, updated_at, completed_at
                 FROM proof_requests
                 WHERE status = $1
                 ORDER BY created_at DESC
@@ -872,46 +865,40 @@ impl ProofRequestRepo {
                 "#,
             )
             .bind(status.as_str())
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?;
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool);
 
-            let count: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM proof_requests WHERE status = $1")
-                    .bind(status.as_str())
-                    .fetch_one(&self.pool)
-                    .await?;
+            let count = sqlx::query_as::<_, (i64,)>(
+                "SELECT COUNT(*) FROM proof_requests WHERE status = $1",
+            )
+            .bind(status.as_str())
+            .fetch_one(&self.pool);
 
-            (rows, count)
+            futures::try_join!(rows, count)?
         } else {
-            let rows = sqlx::query(
+            let rows = sqlx::query_as::<_, ProofRequestListItem>(
                 r#"
                 SELECT
                     id, start_block_number, number_of_blocks_to_prove,
-                    sequence_window, proof_type,
-                    status, error_message,
-                    prover_address, l1_head, intermediate_root_interval,
-                    created_at, updated_at, completed_at, retry_count
+                    proof_type, status, error_message,
+                    created_at, updated_at, completed_at
                 FROM proof_requests
                 ORDER BY created_at DESC
                 LIMIT $1 OFFSET $2
                 "#,
             )
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?;
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool);
 
-            let count: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM proof_requests").fetch_one(&self.pool).await?;
+            let count = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM proof_requests")
+                .fetch_one(&self.pool);
 
-            (rows, count)
+            futures::try_join!(rows, count)?
         };
 
-        let proofs =
-            rows.iter().map(row_to_proof_request_without_receipts).collect::<Result<Vec<_>>>()?;
-        Ok((proofs, count.0.max(0) as u64))
+        Ok((rows, count.0.max(0) as u64))
     }
 
     // ========== Outbox Methods ==========
@@ -1020,19 +1007,6 @@ impl ProofRequestRepo {
 
 /// Helper function to convert a database row to `ProofRequest`
 fn row_to_proof_request(row: &sqlx::postgres::PgRow) -> Result<ProofRequest> {
-    row_to_proof_request_from_row(row, true)
-}
-
-/// Helper function to convert a database row to `ProofRequest` without loading receipt blobs.
-fn row_to_proof_request_without_receipts(row: &sqlx::postgres::PgRow) -> Result<ProofRequest> {
-    row_to_proof_request_from_row(row, false)
-}
-
-/// Convert a database row into `ProofRequest`, optionally reading receipt columns.
-fn row_to_proof_request_from_row(
-    row: &sqlx::postgres::PgRow,
-    read_receipt_columns: bool,
-) -> Result<ProofRequest> {
     let status_str: &str = row.get("status");
     let status = ProofStatus::try_from(status_str)
         .map_err(|e| sqlx::Error::Protocol(format!("Unknown proof status '{status_str}': {e}")))?;
@@ -1042,20 +1016,14 @@ fn row_to_proof_request_from_row(
         sqlx::Error::Protocol(format!("Unknown proof_type '{proof_type_str}': {e}"))
     })?;
 
-    let (stark_receipt, snark_receipt) = if read_receipt_columns {
-        (row.get("stark_receipt"), row.get("snark_receipt"))
-    } else {
-        (None, None)
-    };
-
     Ok(ProofRequest {
         id: row.get("id"),
         start_block_number: row.get("start_block_number"),
         number_of_blocks_to_prove: row.get("number_of_blocks_to_prove"),
         sequence_window: row.get("sequence_window"),
         proof_type,
-        stark_receipt,
-        snark_receipt,
+        stark_receipt: row.get("stark_receipt"),
+        snark_receipt: row.get("snark_receipt"),
         status,
         error_message: row.get("error_message"),
         prover_address: row.get("prover_address"),

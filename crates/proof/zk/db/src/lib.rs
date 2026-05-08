@@ -6,8 +6,9 @@ pub use config::DatabaseConfig;
 mod models;
 pub use models::{
     CreateOutboxEntry, CreateProofRequest, CreateProofSession, MarkOutboxError,
-    MarkOutboxProcessed, OutboxEntry, ProofRequest, ProofSession, ProofStatus, ProofType,
-    RetryOutcome, SessionStatus, SessionType, UpdateProofSession, UpdateReceipt,
+    MarkOutboxProcessed, OutboxEntry, ProofRequest, ProofRequestListItem, ProofRequestPage,
+    ProofSession, ProofStatus, ProofType, RetryOutcome, SessionStatus, SessionType,
+    UpdateProofSession, UpdateReceipt,
 };
 
 mod repo;

@@ -4,7 +4,7 @@ use base_zk_client::{
     ListProofsRequest, ListProofsResponse, ProofJobStatus, ProofSummary,
     ProofType as ProtoProofType, get_proof_response,
 };
-use base_zk_db::{ProofStatus, ProofType as DbProofType};
+use base_zk_db::{ProofRequestPage, ProofStatus, ProofType as DbProofType};
 use tonic::{Request, Response, Status};
 use tracing::debug;
 
@@ -40,19 +40,20 @@ impl ProverServiceServer {
         let req = request.into_inner();
 
         let limit = clamp_limit(req.limit);
-        let offset = validate_offset(req.offset)?;
+        let page =
+            ProofRequestPage::try_new(limit, req.offset).map_err(Status::invalid_argument)?;
         let status_filter = parse_status_filter(req.status_filter)?;
 
         debug!(
             limit = limit,
-            offset = offset,
+            offset = req.offset,
             status_filter = ?status_filter,
             "listing proofs"
         );
 
         let (proofs, total_count) = self
             .repo
-            .list_with_offset(status_filter, limit, offset)
+            .list_with_offset(status_filter, page)
             .await
             .map_err(|e| Status::internal(format!("database error: {e}")))?;
 
@@ -81,14 +82,6 @@ const fn clamp_limit(limit: u64) -> u64 {
         n if n > MAX_LIMIT => MAX_LIMIT,
         n => n,
     }
-}
-
-fn validate_offset(offset: u64) -> Result<u64, Status> {
-    if offset > i64::MAX as u64 {
-        return Err(Status::invalid_argument("offset exceeds maximum supported value"));
-    }
-
-    Ok(offset)
 }
 
 fn parse_status_filter(status_filter: Option<i32>) -> Result<Option<ProofStatus>, Status> {
@@ -160,9 +153,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_offset_rejects_overflow() {
-        let err = validate_offset(i64::MAX as u64 + 1).unwrap_err();
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    fn proof_request_page_rejects_offset_overflow() {
+        let err = ProofRequestPage::try_new(MAX_LIMIT, i64::MAX as u64 + 1).unwrap_err();
+        assert_eq!(err, "offset exceeds maximum supported value");
     }
 
     #[test]

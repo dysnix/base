@@ -5696,6 +5696,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "futures",
  "serde",
  "serde_json",
  "sqlx",
