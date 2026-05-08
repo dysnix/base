@@ -15,9 +15,10 @@ from source.
 
 This fork publishes multi-arch (`linux/amd64` + `linux/arm64`) images for
 those services to `ghcr.io/dysnix/<service-name>`, so they can be consumed
-directly. We intend to upstream the build pipeline; this fork exists to
-unblock our own deployments in the meantime, and to prove the pipeline
-before opening that PR.
+directly. The build pipeline has been upstreamed in
+[base/base#2575](https://github.com/base/base/pull/2575); this fork
+remains active until that lands and operators have a clean migration
+path off these images.
 
 ## Image layout
 
