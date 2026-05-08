@@ -52,7 +52,7 @@ impl ProverServiceServer {
 
         let (proofs, total_count) = self
             .repo
-            .list_with_offset(status_filter, limit as i64, offset)
+            .list_with_offset(status_filter, limit, offset)
             .await
             .map_err(|e| Status::internal(format!("database error: {e}")))?;
 
@@ -83,12 +83,12 @@ const fn clamp_limit(limit: u64) -> u64 {
     }
 }
 
-fn validate_offset(offset: u64) -> Result<i64, Status> {
+fn validate_offset(offset: u64) -> Result<u64, Status> {
     if offset > i64::MAX as u64 {
         return Err(Status::invalid_argument("offset exceeds maximum supported value"));
     }
 
-    Ok(offset as i64)
+    Ok(offset)
 }
 
 fn parse_status_filter(status_filter: Option<i32>) -> Result<Option<ProofStatus>, Status> {

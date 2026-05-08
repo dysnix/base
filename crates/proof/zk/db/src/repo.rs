@@ -848,9 +848,14 @@ impl ProofRequestRepo {
     pub async fn list_with_offset(
         &self,
         status_filter: Option<ProofStatus>,
-        limit: i64,
-        offset: i64,
+        limit: u64,
+        offset: u64,
     ) -> Result<(Vec<ProofRequest>, u64)> {
+        let limit = i64::try_from(limit)
+            .map_err(|_| sqlx::Error::Protocol("limit exceeds i64 range".into()))?;
+        let offset = i64::try_from(offset)
+            .map_err(|_| sqlx::Error::Protocol("offset exceeds i64 range".into()))?;
+
         let (rows, count) = if let Some(status) = status_filter {
             let rows = sqlx::query(
                 r#"
@@ -1015,37 +1020,18 @@ impl ProofRequestRepo {
 
 /// Helper function to convert a database row to `ProofRequest`
 fn row_to_proof_request(row: &sqlx::postgres::PgRow) -> Result<ProofRequest> {
-    let status_str: &str = row.get("status");
-    let status = ProofStatus::try_from(status_str)
-        .map_err(|e| sqlx::Error::Protocol(format!("Unknown proof status '{status_str}': {e}")))?;
-
-    let proof_type_str: &str = row.get("proof_type");
-    let proof_type = ProofType::try_from(proof_type_str).map_err(|e| {
-        sqlx::Error::Protocol(format!("Unknown proof_type '{proof_type_str}': {e}"))
-    })?;
-
-    Ok(ProofRequest {
-        id: row.get("id"),
-        start_block_number: row.get("start_block_number"),
-        number_of_blocks_to_prove: row.get("number_of_blocks_to_prove"),
-        sequence_window: row.get("sequence_window"),
-        proof_type,
-        stark_receipt: row.get("stark_receipt"),
-        snark_receipt: row.get("snark_receipt"),
-        status,
-        error_message: row.get("error_message"),
-        prover_address: row.get("prover_address"),
-        l1_head: row.get("l1_head"),
-        intermediate_root_interval: row.get("intermediate_root_interval"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-        completed_at: row.get("completed_at"),
-        retry_count: row.get("retry_count"),
-    })
+    row_to_proof_request_from_row(row, true)
 }
 
 /// Helper function to convert a database row to `ProofRequest` without loading receipt blobs.
 fn row_to_proof_request_without_receipts(row: &sqlx::postgres::PgRow) -> Result<ProofRequest> {
+    row_to_proof_request_from_row(row, false)
+}
+
+fn row_to_proof_request_from_row(
+    row: &sqlx::postgres::PgRow,
+    read_receipt_columns: bool,
+) -> Result<ProofRequest> {
     let status_str: &str = row.get("status");
     let status = ProofStatus::try_from(status_str)
         .map_err(|e| sqlx::Error::Protocol(format!("Unknown proof status '{status_str}': {e}")))?;
@@ -1055,14 +1041,20 @@ fn row_to_proof_request_without_receipts(row: &sqlx::postgres::PgRow) -> Result<
         sqlx::Error::Protocol(format!("Unknown proof_type '{proof_type_str}': {e}"))
     })?;
 
+    let (stark_receipt, snark_receipt) = if read_receipt_columns {
+        (row.get("stark_receipt"), row.get("snark_receipt"))
+    } else {
+        (None, None)
+    };
+
     Ok(ProofRequest {
         id: row.get("id"),
         start_block_number: row.get("start_block_number"),
         number_of_blocks_to_prove: row.get("number_of_blocks_to_prove"),
         sequence_window: row.get("sequence_window"),
         proof_type,
-        stark_receipt: None,
-        snark_receipt: None,
+        stark_receipt,
+        snark_receipt,
         status,
         error_message: row.get("error_message"),
         prover_address: row.get("prover_address"),
