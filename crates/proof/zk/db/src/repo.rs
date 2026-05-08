@@ -1028,6 +1028,7 @@ fn row_to_proof_request_without_receipts(row: &sqlx::postgres::PgRow) -> Result<
     row_to_proof_request_from_row(row, false)
 }
 
+/// Convert a database row into `ProofRequest`, optionally reading receipt columns.
 fn row_to_proof_request_from_row(
     row: &sqlx::postgres::PgRow,
     read_receipt_columns: bool,
