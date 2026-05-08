@@ -1,0 +1,86 @@
+name: dysnix - Sync from upstream
+
+# Mirrors `base/base` into this fork:
+#   - main           : kept in sync with upstream main via merge-upstream API
+#   - dysnix/ci      : rebased on top of main (carries dysnix-only CI files)
+#   - all tags       : mirrored 1:1 from upstream
+#
+# Runs every 6 hours and on demand. Idempotent.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dysnix-sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync-main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync main from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # merge-upstream returns 422 when already up to date; treat as success.
+          out=$(gh api -X POST repos/${{ github.repository }}/merge-upstream -f branch=main 2>&1) || true
+          echo "$out"
+          if echo "$out" | grep -q '"merge_type"'; then
+            echo "Sync OK."
+          elif echo "$out" | grep -qi 'already up.to.date\|HTTP 422\|no new commits'; then
+            echo "Already up to date."
+          else
+            echo "Unexpected response — failing."
+            exit 1
+          fi
+
+  rebase-dysnix-ci:
+    needs: sync-main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dysnix/ci
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "dysnix-sync[bot]"
+          git config user.email "noreply@dysnix.com"
+
+      - name: Rebase dysnix/ci on origin/main
+        run: |
+          git fetch origin main
+          # Guard: refuse to rebase if dysnix/ci has more than ~50 ahead commits
+          # (would indicate accidental upstream-file edits we shouldn't carry forward)
+          ahead=$(git rev-list --count origin/main..HEAD)
+          if [ "$ahead" -gt 50 ]; then
+            echo "dysnix/ci is $ahead commits ahead of main — refusing to rebase. Investigate."
+            exit 1
+          fi
+          git rebase origin/main
+
+      - name: Push dysnix/ci
+        run: git push origin dysnix/ci --force-with-lease
+
+  mirror-tags:
+    needs: sync-main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror upstream tags
+        run: |
+          git remote add upstream https://github.com/base/base.git
+          git fetch upstream --tags --prune
+          git push origin --tags

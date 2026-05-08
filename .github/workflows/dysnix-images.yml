@@ -1,0 +1,166 @@
+name: dysnix - Build and push images
+
+# Builds multi-arch (linux/amd64 + linux/arm64) container images for selected
+# Base services from a specified upstream release tag, and pushes them to
+# ghcr.io/dysnix/<image>:<tag>.
+#
+# Phase 1: client + consensus only. Other services are wired up in Phase 2.
+#
+# Trigger: manual dispatch with the upstream tag to build (e.g. v0.7.6).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Upstream tag to build (e.g. v0.7.6)"
+        required: true
+        type: string
+      mark_latest:
+        description: "Tag this build as :latest (in addition to :<version>)"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+concurrency:
+  group: dysnix-images-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ matrix.target }} (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: client
+            image: base-reth-node
+            arch: linux/amd64
+            runs-on: ubuntu-24.04
+          - target: client
+            image: base-reth-node
+            arch: linux/arm64
+            runs-on: ubuntu-24.04-arm
+          - target: consensus
+            image: base-consensus
+            arch: linux/amd64
+            runs-on: ubuntu-24.04
+          - target: consensus
+            image: base-consensus
+            arch: linux/arm64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - name: Prepare arch tag
+        run: |
+          arch="${{ matrix.arch }}"
+          echo "PLATFORM_PAIR=${arch//\//-}" >> "$GITHUB_ENV"
+
+      - name: Checkout upstream tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        run: |
+          IMAGE_REF="${REGISTRY}/${OWNER}/${{ matrix.image }}"
+          TARGET="${{ matrix.target }}"
+          docker buildx bake -f etc/docker/docker-bake.hcl "$TARGET" \
+            --set "${TARGET}.platform=${{ matrix.arch }}" \
+            --set "${TARGET}.tags=${IMAGE_REF}" \
+            --set "${TARGET}.output=type=image,push-by-digest=true,name-canonical=true,push=true" \
+            --set "${TARGET}.cache-to=type=registry,ref=${IMAGE_REF}:cache-${PLATFORM_PAIR},mode=max" \
+            --set "${TARGET}.cache-from=type=registry,ref=${IMAGE_REF}:cache-${PLATFORM_PAIR}" \
+            --set "${TARGET}.labels.org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --set "${TARGET}.labels.org.opencontainers.image.revision=${{ inputs.version }}" \
+            --set "${TARGET}.labels.org.opencontainers.image.version=${{ inputs.version }}" \
+            --set "${TARGET}.labels.org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --metadata-file metadata.json
+
+          digest=$(jq -er ".\"${TARGET}\".\"containerimage.digest\"" metadata.json)
+          mkdir -p "/tmp/digests/${TARGET}"
+          touch "/tmp/digests/${TARGET}/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.target }}-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/${{ matrix.target }}/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: manifest ${{ matrix.target }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: client
+            image: base-reth-node
+          - target: consensus
+            image: base-consensus
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.target }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tag args
+        id: tags
+        run: |
+          IMAGE_REF="${REGISTRY}/${OWNER}/${{ matrix.image }}"
+          VERSION="${{ inputs.version }}"
+          TAG_ARGS=( -t "${IMAGE_REF}:${VERSION}" )
+          if [[ ! "$VERSION" =~ -rc\. ]] && [[ "${{ inputs.mark_latest }}" == "true" ]]; then
+            TAG_ARGS+=( -t "${IMAGE_REF}:latest" )
+            # major.minor rolling tag for non-rc releases
+            if [[ "$VERSION" =~ ^v([0-9]+)\.([0-9]+)\. ]]; then
+              TAG_ARGS+=( -t "${IMAGE_REF}:${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" )
+            fi
+          fi
+          {
+            echo "image_ref=${IMAGE_REF}"
+            echo "tag_args=${TAG_ARGS[*]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create ${{ steps.tags.outputs.tag_args }} \
+            $(printf '${{ steps.tags.outputs.image_ref }}@sha256:%s ' *)
+
+      - name: Inspect
+        run: |
+          docker buildx imagetools inspect "${{ steps.tags.outputs.image_ref }}:${{ inputs.version }}"
